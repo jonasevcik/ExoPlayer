@@ -15,6 +15,18 @@
  */
 package com.google.android.exoplayer2.source.hls;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.math.BigInteger;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.Locale;
+
+import android.net.Uri;
+import android.os.SystemClock;
+import android.text.TextUtils;
+import android.util.Log;
+
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.extractor.Extractor;
@@ -37,18 +49,6 @@ import com.google.android.exoplayer2.upstream.HttpDataSource.InvalidResponseCode
 import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.util.UriUtil;
 import com.google.android.exoplayer2.util.Util;
-
-import android.net.Uri;
-import android.os.SystemClock;
-import android.text.TextUtils;
-import android.util.Log;
-
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.math.BigInteger;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.Locale;
 
 /**
  * A temporary test source of HLS chunks.
@@ -79,6 +79,7 @@ public class HlsChunkSource {
   private boolean seenFirstExternalTrackSelection;
   private byte[] scratchSpace;
   private boolean live;
+  private boolean liveEvent;
   private long durationUs;
   private IOException fatalError;
 
@@ -149,7 +150,7 @@ public class HlsChunkSource {
    * @return True if this is a live playback. False otherwise.
    */
   public boolean isLive() {
-    return live;
+    return live && !liveEvent;
   }
 
   /**
@@ -252,7 +253,7 @@ public class HlsChunkSource {
 
     int chunkIndex = chunkMediaSequence - mediaPlaylist.mediaSequence;
     if (chunkIndex >= mediaPlaylist.segments.size()) {
-      if (!mediaPlaylist.live) {
+      if (!mediaPlaylist.live && !mediaPlaylist.liveEvent) {
         out.endOfStream = true;
       } else if (shouldRerequestLiveMediaPlaylist(variantIndex)) {
         out.chunk = newMediaPlaylistChunk(variantIndex, evaluation.trigger, evaluation.data);
@@ -285,7 +286,7 @@ public class HlsChunkSource {
 
     // Compute start and end times, and the sequence number of the next chunk.
     long startTimeUs;
-    if (live) {
+    if (live && !liveEvent) {
       if (previous == null) {
         startTimeUs = 0;
       } else if (switchingVariant) {
@@ -548,7 +549,10 @@ public class HlsChunkSource {
     variantLastPlaylistLoadTimesMs[variantIndex] = SystemClock.elapsedRealtime();
     variantPlaylists[variantIndex] = mediaPlaylist;
     live |= mediaPlaylist.live;
-    durationUs = live ? C.UNSET_TIME_US : mediaPlaylist.durationUs;
+    liveEvent |= mediaPlaylist.liveEvent;
+
+    durationUs = live && !liveEvent ? C.UNSET_TIME_US : mediaPlaylist.durationUs;
+    Log.d(TAG, "live " + live + " liveEvent " + liveEvent + " durationUs " + durationUs);
   }
 
   private boolean allEnabledVariantsBlacklisted() {

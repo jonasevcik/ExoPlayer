@@ -15,9 +15,9 @@
  */
 package com.google.android.exoplayer2.source.hls.playlist;
 
-import com.google.android.exoplayer2.C;
-
 import java.util.List;
+
+import com.google.android.exoplayer2.C;
 
 /**
  * Represents an HLS media playlist.
@@ -67,15 +67,17 @@ public final class HlsMediaPlaylist extends HlsPlaylist {
   public final int version;
   public final List<Segment> segments;
   public final boolean live;
+  public final boolean liveEvent;
   public final long durationUs;
 
   public HlsMediaPlaylist(String baseUri, int mediaSequence, int targetDurationSecs, int version,
-      boolean live, List<Segment> segments) {
+      boolean live, boolean liveEvent, List<Segment> segments) {
     super(baseUri, HlsPlaylist.TYPE_MEDIA);
     this.mediaSequence = mediaSequence;
     this.targetDurationSecs = targetDurationSecs;
     this.version = version;
     this.live = live;
+    this.liveEvent = liveEvent;
     this.segments = segments;
 
     if (!segments.isEmpty()) {

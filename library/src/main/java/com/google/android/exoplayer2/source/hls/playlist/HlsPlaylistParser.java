@@ -15,25 +15,21 @@
  */
 package com.google.android.exoplayer2.source.hls.playlist;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.util.*;
+import java.util.regex.Pattern;
+
+import android.net.Uri;
+
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.ParserException;
 import com.google.android.exoplayer2.source.hls.playlist.HlsMediaPlaylist.Segment;
 import com.google.android.exoplayer2.upstream.ParsingLoadable;
 import com.google.android.exoplayer2.util.MimeTypes;
-
-import android.net.Uri;
-
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Queue;
-import java.util.regex.Pattern;
 
 /**
  * HLS playlists parsing logic.
@@ -48,6 +44,7 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
   private static final String MEDIA_DURATION_TAG = "#EXTINF";
   private static final String MEDIA_SEQUENCE_TAG = "#EXT-X-MEDIA-SEQUENCE";
   private static final String TARGET_DURATION_TAG = "#EXT-X-TARGETDURATION";
+  private static final String PLAYLIST_TYPE_TAG = "#EXT-X-PLAYLIST-TYPE";
   private static final String ENDLIST_TAG = "#EXT-X-ENDLIST";
   private static final String KEY_TAG = "#EXT-X-KEY";
   private static final String BYTERANGE_TAG = "#EXT-X-BYTERANGE";
@@ -90,6 +87,7 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
       Pattern.compile(VERSION_TAG + ":(\\d+)\\b");
   private static final Pattern BYTERANGE_REGEX =
       Pattern.compile(BYTERANGE_TAG + ":(\\d+(?:@\\d+)?)\\b");
+  private static final Pattern PLAYLIST_TYPE_PATTERN = Pattern.compile(PLAYLIST_TYPE_TAG + ":(EVENT|VOD)\\b");
 
   private static final Pattern METHOD_ATTR_REGEX =
       Pattern.compile(METHOD_ATTR + "=(" + METHOD_NONE + "|" + METHOD_AES128 + ")");
@@ -253,6 +251,7 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
     int targetDurationSecs = 0;
     int version = 1; // Default version == 1.
     boolean live = true;
+    boolean liveEvent = false;
     List<Segment> segments = new ArrayList<>();
 
     double segmentDurationSecs = 0.0;
@@ -323,12 +322,15 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
           segmentByterangeOffset += segmentByterangeLength;
         }
         segmentByterangeLength = C.LENGTH_UNBOUNDED;
+      } else if(line.startsWith(PLAYLIST_TYPE_TAG)) {
+        String playlistType = HlsParserUtil.parseStringAttr(line, PLAYLIST_TYPE_PATTERN, PLAYLIST_TYPE_TAG);
+        liveEvent = playlistType != null && playlistType.toUpperCase().equals("EVENT");
       } else if (line.equals(ENDLIST_TAG)) {
         live = false;
       }
     }
     return new HlsMediaPlaylist(baseUri, mediaSequence, targetDurationSecs, version, live,
-        Collections.unmodifiableList(segments));
+        liveEvent, Collections.unmodifiableList(segments));
   }
 
   private static class LineIterator {
