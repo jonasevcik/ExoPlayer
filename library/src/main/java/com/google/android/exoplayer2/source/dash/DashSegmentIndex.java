@@ -16,7 +16,7 @@
 package com.google.android.exoplayer2.source.dash;
 
 import com.google.android.exoplayer2.C;
-import com.google.android.exoplayer2.source.dash.mpd.RangedUri;
+import com.google.android.exoplayer2.source.dash.manifest.RangedUri;
 
 /**
  * Indexes the segments within a media stream.
@@ -96,7 +96,7 @@ public interface DashSegmentIndex {
    * segment duration. If the presentation is dynamic, it's possible that only a subset of the
    * segments are available.
    *
-   * @return True if segments are defined explicitly by the index. False otherwise.
+   * @return Whether segments are defined explicitly by the index.
    */
   boolean isExplicit();
 

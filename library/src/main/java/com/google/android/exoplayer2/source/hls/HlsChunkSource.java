@@ -35,17 +35,18 @@ import com.google.android.exoplayer2.extractor.ts.AdtsExtractor;
 import com.google.android.exoplayer2.extractor.ts.PtsTimestampAdjuster;
 import com.google.android.exoplayer2.extractor.ts.TsExtractor;
 import com.google.android.exoplayer2.source.BehindLiveWindowException;
+import com.google.android.exoplayer2.source.TrackGroup;
 import com.google.android.exoplayer2.source.chunk.Chunk;
 import com.google.android.exoplayer2.source.chunk.ChunkHolder;
+import com.google.android.exoplayer2.source.chunk.ChunkedTrackBlacklistUtil;
 import com.google.android.exoplayer2.source.chunk.DataChunk;
-import com.google.android.exoplayer2.source.chunk.FormatEvaluator;
-import com.google.android.exoplayer2.source.chunk.FormatEvaluator.Evaluation;
 import com.google.android.exoplayer2.source.hls.playlist.HlsMediaPlaylist;
 import com.google.android.exoplayer2.source.hls.playlist.HlsPlaylistParser;
 import com.google.android.exoplayer2.source.hls.playlist.Variant;
+import com.google.android.exoplayer2.trackselection.BaseTrackSelection;
+import com.google.android.exoplayer2.trackselection.TrackSelection;
 import com.google.android.exoplayer2.upstream.DataSource;
 import com.google.android.exoplayer2.upstream.DataSpec;
-import com.google.android.exoplayer2.upstream.HttpDataSource.InvalidResponseCodeException;
 import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.util.UriUtil;
 import com.google.android.exoplayer2.util.Util;
@@ -59,7 +60,11 @@ public class HlsChunkSource {
    * The default time for which a media playlist should be blacklisted.
    */
   public static final long DEFAULT_PLAYLIST_BLACKLIST_MS = 60000;
-
+  /**
+   * Subtracted value to lookup position when switching between variants in live streams to avoid
+   * gaps in playback in case playlist drift apart.
+   */
+  private static final double LIVE_VARIANT_SWITCH_SAFETY_EXTRA_SECS = 2.0;
   private static final String TAG = "HlsChunkSource";
   private static final String AAC_FILE_EXTENSION = ".aac";
   private static final String MP3_FILE_EXTENSION = ".mp3";
@@ -68,15 +73,13 @@ public class HlsChunkSource {
 
   private final String baseUri;
   private final DataSource dataSource;
-  private final FormatEvaluator adaptiveFormatEvaluator;
-  private final Evaluation evaluation;
   private final HlsPlaylistParser playlistParser;
   private final PtsTimestampAdjusterProvider timestampAdjusterProvider;
   private final Variant[] variants;
   private final HlsMediaPlaylist[] variantPlaylists;
+  private final TrackGroup trackGroup;
   private final long[] variantLastPlaylistLoadTimesMs;
 
-  private boolean seenFirstExternalTrackSelection;
   private byte[] scratchSpace;
   private boolean live;
   private boolean liveEvent;
@@ -88,10 +91,10 @@ public class HlsChunkSource {
   private String encryptionIvString;
   private byte[] encryptionIv;
 
-  // Properties of enabled variants.
-  private Variant[] enabledVariants;
-  private long[] enabledVariantBlacklistTimes;
-  private boolean[] enabledVariantBlacklistFlags;
+  // Note: The track group in the selection is typically *not* equal to trackGroup. This is due to
+  // the way in which HlsSampleStreamWrapper generates track groups. Use only index based methods
+  // in TrackSelection to avoid unexpected behavior.
+  private TrackSelection trackSelection;
 
   /**
    * @param baseUri The playlist's base uri.
@@ -100,25 +103,25 @@ public class HlsChunkSource {
    * @param timestampAdjusterProvider A provider of {@link PtsTimestampAdjuster} instances. If
    *     multiple {@link HlsChunkSource}s are used for a single playback, they should all share the
    *     same provider.
-   * @param adaptiveFormatEvaluator For adaptive tracks, selects from the available formats.
    */
   public HlsChunkSource(String baseUri, Variant[] variants, DataSource dataSource,
-      PtsTimestampAdjusterProvider timestampAdjusterProvider,
-      FormatEvaluator adaptiveFormatEvaluator) {
+      PtsTimestampAdjusterProvider timestampAdjusterProvider) {
     this.baseUri = baseUri;
     this.variants = variants;
     this.dataSource = dataSource;
-    this.adaptiveFormatEvaluator = adaptiveFormatEvaluator;
     this.timestampAdjusterProvider = timestampAdjusterProvider;
     playlistParser = new HlsPlaylistParser();
-    evaluation = new Evaluation();
     variantPlaylists = new HlsMediaPlaylist[variants.length];
     variantLastPlaylistLoadTimesMs = new long[variants.length];
+
+    Format[] variantFormats = new Format[variants.length];
     int[] initialTrackSelection = new int[variants.length];
     for (int i = 0; i < variants.length; i++) {
+      variantFormats[i] = variants[i].format;
       initialTrackSelection[i] = i;
     }
-    selectTracksInternal(initialTrackSelection, false);
+    trackGroup = new TrackGroup(variantFormats);
+    trackSelection = new InitializationTrackSelection(trackGroup, initialTrackSelection);
   }
 
   /**
@@ -134,20 +137,7 @@ public class HlsChunkSource {
   }
 
   /**
-   * Returns whether this source supports adaptation between its tracks.
-   *
-   * @return Whether this source supports adaptation between its tracks.
-   */
-  public boolean isAdaptive() {
-    return adaptiveFormatEvaluator != null;
-  }
-
-  /**
    * Returns whether this is a live playback.
-   * <p>
-   * This method should only be called after the source has been prepared.
-   *
-   * @return True if this is a live playback. False otherwise.
    */
   public boolean isLive() {
     return live && !liveEvent;
@@ -155,60 +145,36 @@ public class HlsChunkSource {
 
   /**
    * Returns the duration of the source, or {@link C#UNSET_TIME_US} if the duration is unknown.
-   * <p>
-   * This method should only be called after the source has been prepared.
-   *
-   * @return The number of tracks.
    */
   public long getDurationUs() {
     return durationUs;
   }
 
   /**
-   * Returns the number of tracks exposed by the source.
-   * <p>
-   * This method should only be called after the source has been prepared.
-   *
-   * @return The number of tracks.
+   * Returns the track group exposed by the source.
    */
-  public int getTrackCount() {
-    return variants.length;
-  }
-
-  /**
-   * Returns the format of the track at the specified index.
-   * <p>
-   * This method should only be called after the source has been prepared.
-   *
-   * @param index The track index.
-   * @return The format of the track.
-   */
-  public Format getTrackFormat(int index) {
-    return variants[index].format;
+  public TrackGroup getTrackGroup() {
+    return trackGroup;
   }
 
   /**
    * Selects tracks for use.
-   * <p>
-   * This method should only be called after the source has been prepared.
    *
-   * @param tracks The track indices.
+   * @param trackSelection The track selection.
    */
-  public void selectTracks(int[] tracks) {
-    selectTracksInternal(tracks, true);
+  public void selectTracks(TrackSelection trackSelection) {
+    this.trackSelection = trackSelection;
   }
 
   /**
    * Resets the source.
-   * <p>
-   * This method should only be called after the source has been prepared.
    */
   public void reset() {
     fatalError = null;
   }
 
   /**
-   * Gets the next chunk to load.
+   * Returns the next chunk to load.
    * <p>
    * If a chunk is available then {@link ChunkHolder#chunk} is set. If the end of the stream has
    * been reached then {@link ChunkHolder#endOfStream} is set. If a chunk is not available but the
@@ -221,33 +187,47 @@ public class HlsChunkSource {
    * @param out A holder to populate.
    */
   public void getNextChunk(HlsMediaChunk previous, long playbackPositionUs, ChunkHolder out) {
-    updateFormatEvaluation(previous, playbackPositionUs);
-    int variantIndex = 0;
-    for (int i = 0; i < variants.length; i++) {
-      if (variants[i].format == evaluation.format) {
-        variantIndex = i;
-        break;
-      }
-    }
-    boolean switchingVariant = previous != null
-        && variants[variantIndex].format != previous.format;
+    int oldVariantIndex = previous == null ? -1 : trackGroup.indexOf(previous.trackFormat);
 
-    HlsMediaPlaylist mediaPlaylist = variantPlaylists[variantIndex];
+    // Use start time of the previous chunk rather than its end time because switching format will
+    // require downloading overlapping segments.
+    long bufferedDurationUs = previous == null ? 0
+        : Math.max(0, previous.getAdjustedStartTimeUs() - playbackPositionUs);
+    trackSelection.updateSelectedTrack(bufferedDurationUs);
+    int newVariantIndex = trackSelection.getSelectedIndexInTrackGroup();
+
+    boolean switchingVariant = oldVariantIndex != newVariantIndex;
+    HlsMediaPlaylist mediaPlaylist = variantPlaylists[newVariantIndex];
     if (mediaPlaylist == null) {
       // We don't have the media playlist for the next variant. Request it now.
-      out.chunk = newMediaPlaylistChunk(variantIndex, evaluation.trigger, evaluation.data);
+      out.chunk = newMediaPlaylistChunk(newVariantIndex, trackSelection.getSelectionReason(),
+          trackSelection.getSelectionData());
       return;
     }
 
     int chunkMediaSequence;
-    if (previous == null) {
-      chunkMediaSequence = Util.binarySearchFloor(mediaPlaylist.segments, playbackPositionUs,
-          true, true) + mediaPlaylist.mediaSequence;
+    if (live) {
+      if (previous == null) {
+        chunkMediaSequence = Util.binarySearchFloor(mediaPlaylist.segments, playbackPositionUs,
+            true, true) + mediaPlaylist.mediaSequence;
+      } else {
+        chunkMediaSequence = getLiveNextChunkSequenceNumber(previous.chunkIndex, oldVariantIndex,
+            newVariantIndex);
+        if (chunkMediaSequence < mediaPlaylist.mediaSequence) {
+          fatalError = new BehindLiveWindowException();
+          return;
+        }
+      }
     } else {
-      chunkMediaSequence = switchingVariant ? previous.chunkIndex : previous.chunkIndex + 1;
-      if (chunkMediaSequence < mediaPlaylist.mediaSequence) {
-        fatalError = new BehindLiveWindowException();
-        return;
+      // Not live.
+      if (previous == null) {
+        chunkMediaSequence = Util.binarySearchFloor(mediaPlaylist.segments, playbackPositionUs,
+            true, true) + mediaPlaylist.mediaSequence;
+      } else if (switchingVariant) {
+        chunkMediaSequence = Util.binarySearchFloor(mediaPlaylist.segments,
+            previous.startTimeUs, true, true) + mediaPlaylist.mediaSequence;
+      } else {
+        chunkMediaSequence = previous.getNextChunkIndex();
       }
     }
 
@@ -255,8 +235,9 @@ public class HlsChunkSource {
     if (chunkIndex >= mediaPlaylist.segments.size()) {
       if (!mediaPlaylist.live && !mediaPlaylist.liveEvent) {
         out.endOfStream = true;
-      } else if (shouldRerequestLiveMediaPlaylist(variantIndex)) {
-        out.chunk = newMediaPlaylistChunk(variantIndex, evaluation.trigger, evaluation.data);
+      } else if (shouldRerequestLiveMediaPlaylist(newVariantIndex)) {
+        out.chunk = newMediaPlaylistChunk(newVariantIndex,
+            trackSelection.getSelectionReason(), trackSelection.getSelectionData());
       }
       return;
     }
@@ -269,8 +250,8 @@ public class HlsChunkSource {
       Uri keyUri = UriUtil.resolveToUri(mediaPlaylist.baseUri, segment.encryptionKeyUri);
       if (!keyUri.equals(encryptionKeyUri)) {
         // Encryption is specified and the key has changed.
-        out.chunk = newEncryptionKeyChunk(keyUri, segment.encryptionIV, variantIndex,
-            evaluation.trigger, evaluation.data);
+        out.chunk = newEncryptionKeyChunk(keyUri, segment.encryptionIV, newVariantIndex,
+            trackSelection.getSelectionReason(), trackSelection.getSelectionData());
         return;
       }
       if (!Util.areEqual(segment.encryptionIV, encryptionIvString)) {
@@ -290,15 +271,15 @@ public class HlsChunkSource {
       if (previous == null) {
         startTimeUs = 0;
       } else if (switchingVariant) {
-        startTimeUs = previous.startTimeUs;
+        startTimeUs = previous.getAdjustedStartTimeUs();
       } else {
-        startTimeUs = previous.endTimeUs;
+        startTimeUs = previous.getAdjustedEndTimeUs();
       }
     } else /* Not live */ {
       startTimeUs = segment.startTimeUs;
     }
     long endTimeUs = startTimeUs + (long) (segment.durationSecs * C.MICROS_PER_SECOND);
-    Format format = variants[variantIndex].format;
+    Format format = variants[newVariantIndex].format;
 
     // Configure the extractor that will read the chunk.
     Extractor extractor;
@@ -324,7 +305,7 @@ public class HlsChunkSource {
       extractor = new WebvttExtractor(format.language, timestampAdjuster);
     } else if (previous == null
         || previous.discontinuitySequenceNumber != segment.discontinuitySequenceNumber
-        || format != previous.format) {
+        || format != previous.trackFormat) {
       // MPEG-2 TS segments, but we need a new extractor.
       PtsTimestampAdjuster timestampAdjuster = timestampAdjusterProvider.getAdjuster(true,
           segment.discontinuitySequenceNumber, startTimeUs);
@@ -333,7 +314,7 @@ public class HlsChunkSource {
         return;
       }
       int workaroundFlags = 0;
-      String codecs = variants[variantIndex].codecs;
+      String codecs = variants[newVariantIndex].codecs;
       if (!TextUtils.isEmpty(codecs)) {
         // Sometimes AAC and H264 streams are declared in TS chunks even though they don't really
         // exist. If we know from the codec attribute that they don't exist, then we can explicitly
@@ -352,13 +333,56 @@ public class HlsChunkSource {
       extractorNeedsInit = false;
     }
 
-    out.chunk = new HlsMediaChunk(dataSource, dataSpec, format, evaluation.trigger, evaluation.data,
+    out.chunk = new HlsMediaChunk(dataSource, dataSpec, format,
+        trackSelection.getSelectionReason(), trackSelection.getSelectionData(),
         startTimeUs, endTimeUs, chunkMediaSequence, segment.discontinuitySequenceNumber, extractor,
         extractorNeedsInit, switchingVariant, encryptionKey, encryptionIv);
   }
 
   /**
-   * Invoked when the {@link HlsSampleStreamWrapper} has finished loading a chunk obtained from this
+   * Returns the media sequence number of a chunk in a new variant for a live stream variant switch.
+   *
+   * @param previousChunkIndex The index of the last chunk in the old variant.
+   * @param oldVariantIndex The index of the old variant.
+   * @param newVariantIndex The index of the new variant.
+   * @return Media sequence number of the chunk to switch to in a live stream in the variant that
+   *     corresponds to the given {@code newVariantIndex}.
+   */
+  private int getLiveNextChunkSequenceNumber(int previousChunkIndex, int oldVariantIndex,
+      int newVariantIndex) {
+    if (oldVariantIndex == newVariantIndex) {
+      return previousChunkIndex + 1;
+    }
+    HlsMediaPlaylist oldMediaPlaylist = variantPlaylists[oldVariantIndex];
+    HlsMediaPlaylist newMediaPlaylist = variantPlaylists[newVariantIndex];
+    double offsetToLiveInstantSecs = 0;
+    for (int i = previousChunkIndex - oldMediaPlaylist.mediaSequence;
+         i < oldMediaPlaylist.segments.size(); i++) {
+      offsetToLiveInstantSecs += oldMediaPlaylist.segments.get(i).durationSecs;
+    }
+    long currentTimeMs = SystemClock.elapsedRealtime();
+    offsetToLiveInstantSecs +=
+        (double) (currentTimeMs - variantLastPlaylistLoadTimesMs[oldVariantIndex]) / 1000;
+    offsetToLiveInstantSecs += LIVE_VARIANT_SWITCH_SAFETY_EXTRA_SECS;
+    offsetToLiveInstantSecs -=
+        (double) (currentTimeMs - variantLastPlaylistLoadTimesMs[newVariantIndex]) / 1000;
+    if (offsetToLiveInstantSecs < 0) {
+      // The instant we are looking for is not contained in the playlist, we need it to be
+      // refreshed.
+      return newMediaPlaylist.mediaSequence + newMediaPlaylist.segments.size() + 1;
+    }
+    for (int i = newMediaPlaylist.segments.size() - 1; i >= 0; i--) {
+      offsetToLiveInstantSecs -= newMediaPlaylist.segments.get(i).durationSecs;
+      if (offsetToLiveInstantSecs < 0) {
+        return newMediaPlaylist.mediaSequence + i;
+      }
+    }
+    // We have fallen behind the live window.
+    return newMediaPlaylist.mediaSequence - 1;
+  }
+
+  /**
+   * Called when the {@link HlsSampleStreamWrapper} has finished loading a chunk obtained from this
    * source.
    *
    * @param chunk The chunk whose load has been completed.
@@ -377,121 +401,20 @@ public class HlsChunkSource {
   }
 
   /**
-   * Invoked when the {@link HlsSampleStreamWrapper} encounters an error loading a chunk obtained
+   * Called when the {@link HlsSampleStreamWrapper} encounters an error loading a chunk obtained
    * from this source.
    *
    * @param chunk The chunk whose load encountered the error.
    * @param cancelable Whether the load can be canceled.
    * @param e The error.
-   * @return True if the load should be canceled. False otherwise.
+   * @return Whether the load should be canceled.
    */
   public boolean onChunkLoadError(Chunk chunk, boolean cancelable, IOException e) {
-    if (cancelable && e instanceof InvalidResponseCodeException) {
-      InvalidResponseCodeException responseCodeException = (InvalidResponseCodeException) e;
-      int responseCode = responseCodeException.responseCode;
-      if (responseCode == 404 || responseCode == 410) {
-        int enabledVariantIndex = getEnabledVariantIndex(chunk.format);
-        boolean alreadyBlacklisted = enabledVariantBlacklistFlags[enabledVariantIndex];
-        enabledVariantBlacklistFlags[enabledVariantIndex] = true;
-        enabledVariantBlacklistTimes[enabledVariantIndex] = SystemClock.elapsedRealtime();
-        if (alreadyBlacklisted) {
-          // The playlist was already blacklisted.
-          Log.w(TAG, "Already blacklisted variant (" + responseCode + "): "
-              + chunk.dataSpec.uri);
-          return false;
-        } else if (!allEnabledVariantsBlacklisted()) {
-          // We've handled the 404/410 by blacklisting the variant.
-          Log.w(TAG, "Blacklisted variant (" + responseCode + "): "
-              + chunk.dataSpec.uri);
-          return true;
-        } else {
-          // This was the last non-blacklisted playlist. Don't blacklist it.
-          Log.w(TAG, "Final variant not blacklisted (" + responseCode + "): "
-              + chunk.dataSpec.uri);
-          enabledVariantBlacklistFlags[enabledVariantIndex] = false;
-          return false;
-        }
-      }
-    }
-    return false;
+    return cancelable && ChunkedTrackBlacklistUtil.maybeBlacklistTrack(trackSelection,
+        trackSelection.indexOf(trackGroup.indexOf(chunk.trackFormat)), e);
   }
 
   // Private methods.
-
-  private void selectTracksInternal(int[] tracks, boolean isExternal) {
-    seenFirstExternalTrackSelection |= isExternal;
-
-    // Construct and sort the enabled variants.
-    enabledVariants = new Variant[tracks.length];
-    for (int i = 0; i < tracks.length; i++) {
-      enabledVariants[i] = variants[tracks[i]];
-    }
-    Arrays.sort(enabledVariants, new Comparator<Variant>() {
-      private final Comparator<Format> formatComparator =
-          new Format.DecreasingBandwidthComparator();
-      @Override
-      public int compare(Variant first, Variant second) {
-        return formatComparator.compare(first.format, second.format);
-      }
-    });
-
-    // Reset the enabled variant blacklist flags.
-    enabledVariantBlacklistTimes = new long[enabledVariants.length];
-    enabledVariantBlacklistFlags = new boolean[enabledVariants.length];
-
-    if (!isExternal) {
-      return;
-    }
-
-    if (enabledVariants.length > 1) {
-      Format[] formats = new Format[enabledVariants.length];
-      for (int i = 0; i < formats.length; i++) {
-        formats[i] = enabledVariants[i].format;
-      }
-      // TODO[REFACTOR]: We need to disable this at some point.
-      adaptiveFormatEvaluator.enable(formats);
-      if (!Util.contains(formats, evaluation.format)) {
-        evaluation.format = null;
-      }
-    } else {
-      evaluation.trigger = FormatEvaluator.TRIGGER_UNKNOWN;
-      evaluation.data = null;
-    }
-  }
-
-  private void updateFormatEvaluation(HlsMediaChunk previous, long playbackPositionUs) {
-    clearStaleBlacklistedVariants();
-    if (!seenFirstExternalTrackSelection) {
-      if (!enabledVariantBlacklistFlags[getEnabledVariantIndex(variants[0].format)]) {
-        // Use the first variant prior to external track selection, unless it's been blacklisted.
-        evaluation.format = variants[0].format;
-        return;
-      }
-      // Try from lowest bitrate to highest.
-      for (int i = enabledVariants.length - 1; i >= 0; i--) {
-        if (!enabledVariantBlacklistFlags[i]) {
-          evaluation.format = enabledVariants[i].format;
-          return;
-        }
-      }
-      // Should never happen.
-      throw new IllegalStateException();
-    }
-    if (enabledVariants.length == 1) {
-      evaluation.format = enabledVariants[0].format;
-      return;
-    }
-    long bufferedDurationUs;
-    if (previous != null) {
-      // Use start time of the previous chunk rather than its end time because switching format
-      // will require downloading overlapping segments.
-      bufferedDurationUs = Math.max(0, previous.startTimeUs - playbackPositionUs);
-    } else {
-      bufferedDurationUs = 0;
-    }
-    adaptiveFormatEvaluator.evaluateFormat(bufferedDurationUs, enabledVariantBlacklistFlags,
-        evaluation);
-  }
 
   private boolean shouldRerequestLiveMediaPlaylist(int variantIndex) {
     HlsMediaPlaylist mediaPlaylist = variantPlaylists[variantIndex];
@@ -501,21 +424,21 @@ public class HlsChunkSource {
     return timeSinceLastMediaPlaylistLoadMs >= (mediaPlaylist.targetDurationSecs * 1000) / 2;
   }
 
-  private MediaPlaylistChunk newMediaPlaylistChunk(int variantIndex, int formatEvaluatorTrigger,
-      Object formatEvaluatorData) {
+  private MediaPlaylistChunk newMediaPlaylistChunk(int variantIndex, int trackSelectionReason,
+      Object trackSelectionData) {
     Uri mediaPlaylistUri = UriUtil.resolveToUri(baseUri, variants[variantIndex].url);
     DataSpec dataSpec = new DataSpec(mediaPlaylistUri, 0, C.LENGTH_UNBOUNDED, null,
         DataSpec.FLAG_ALLOW_GZIP);
     return new MediaPlaylistChunk(dataSource, dataSpec, variants[variantIndex].format,
-        formatEvaluatorTrigger, formatEvaluatorData, scratchSpace, playlistParser, variantIndex,
+        trackSelectionReason, trackSelectionData, scratchSpace, playlistParser, variantIndex,
         mediaPlaylistUri);
   }
 
   private EncryptionKeyChunk newEncryptionKeyChunk(Uri keyUri, String iv, int variantIndex,
-      int formatEvaluatorTrigger, Object formatEvaluatorData) {
+      int trackSelectionReason, Object trackSelectionData) {
     DataSpec dataSpec = new DataSpec(keyUri, 0, C.LENGTH_UNBOUNDED, null, DataSpec.FLAG_ALLOW_GZIP);
     return new EncryptionKeyChunk(dataSource, dataSpec, variants[variantIndex].format,
-        formatEvaluatorTrigger, formatEvaluatorData, scratchSpace, iv);
+        trackSelectionReason, trackSelectionData, scratchSpace, iv);
   }
 
   private void setEncryptionData(Uri keyUri, String iv, byte[] secretKey) {
@@ -555,36 +478,53 @@ public class HlsChunkSource {
     Log.d(TAG, "live " + live + " liveEvent " + liveEvent + " durationUs " + durationUs);
   }
 
-  private boolean allEnabledVariantsBlacklisted() {
-    for (boolean enabledVariantBlacklistFlag : enabledVariantBlacklistFlags) {
-      if (!enabledVariantBlacklistFlag) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  private void clearStaleBlacklistedVariants() {
-    long currentTime = SystemClock.elapsedRealtime();
-    for (int i = 0; i < enabledVariantBlacklistFlags.length; i++) {
-      if (enabledVariantBlacklistFlags[i]
-          && currentTime - enabledVariantBlacklistTimes[i] > DEFAULT_PLAYLIST_BLACKLIST_MS) {
-        enabledVariantBlacklistFlags[i] = false;
-      }
-    }
-  }
-
-  private int getEnabledVariantIndex(Format format) {
-    for (int i = 0; i < enabledVariants.length; i++) {
-      if (enabledVariants[i].format == format) {
-        return i;
-      }
-    }
-    // Should never happen.
-    throw new IllegalStateException("Invalid format: " + format);
-  }
-
   // Private classes.
+
+  /**
+   * A {@link TrackSelection} to use for initialization.
+   */
+  public static final class InitializationTrackSelection extends BaseTrackSelection {
+
+    private int selectedIndex;
+
+    public InitializationTrackSelection(TrackGroup group, int[] tracks) {
+      super(group, tracks);
+      selectedIndex = indexOf(group.getFormat(0));
+    }
+
+    @Override
+    public void updateSelectedTrack(long bufferedDurationUs) {
+      long nowMs = SystemClock.elapsedRealtime();
+      if (!isBlacklisted(selectedIndex, nowMs)) {
+        return;
+      }
+      // Try from lowest bitrate to highest.
+      for (int i = length - 1; i >= 0; i--) {
+        if (!isBlacklisted(i, nowMs)) {
+          selectedIndex = i;
+          return;
+        }
+      }
+      // Should never happen.
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public int getSelectedIndex() {
+      return selectedIndex;
+    }
+
+    @Override
+    public int getSelectionReason() {
+      return C.SELECTION_REASON_UNKNOWN;
+    }
+
+    @Override
+    public Object getSelectionData() {
+      return null;
+    }
+
+  }
 
   private static final class MediaPlaylistChunk extends DataChunk {
 
@@ -595,12 +535,12 @@ public class HlsChunkSource {
 
     private HlsMediaPlaylist result;
 
-    public MediaPlaylistChunk(DataSource dataSource, DataSpec dataSpec, Format format,
-        int formatEvaluatorTrigger, Object formatEvaluatorData, byte[] scratchSpace,
+    public MediaPlaylistChunk(DataSource dataSource, DataSpec dataSpec, Format trackFormat,
+        int trackSelectionReason, Object trackSelectionData, byte[] scratchSpace,
         HlsPlaylistParser playlistParser, int variantIndex,
         Uri playlistUri) {
-      super(dataSource, dataSpec, C.DATA_TYPE_MANIFEST, format, formatEvaluatorTrigger,
-          formatEvaluatorData, scratchSpace);
+      super(dataSource, dataSpec, C.DATA_TYPE_MANIFEST, trackFormat, trackSelectionReason,
+          trackSelectionData, scratchSpace);
       this.variantIndex = variantIndex;
       this.playlistParser = playlistParser;
       this.playlistUri = playlistUri;
@@ -624,10 +564,10 @@ public class HlsChunkSource {
 
     private byte[] result;
 
-    public EncryptionKeyChunk(DataSource dataSource, DataSpec dataSpec, Format format,
-        int formatEvaluatorTrigger, Object formatEvaluatorData, byte[] scratchSpace, String iv) {
-      super(dataSource, dataSpec, C.DATA_TYPE_DRM, format, formatEvaluatorTrigger,
-          formatEvaluatorData, scratchSpace);
+    public EncryptionKeyChunk(DataSource dataSource, DataSpec dataSpec, Format trackFormat,
+        int trackSelectionReason, Object trackSelectionData, byte[] scratchSpace, String iv) {
+      super(dataSource, dataSpec, C.DATA_TYPE_DRM, trackFormat, trackSelectionReason,
+          trackSelectionData, scratchSpace);
       this.iv = iv;
     }
 

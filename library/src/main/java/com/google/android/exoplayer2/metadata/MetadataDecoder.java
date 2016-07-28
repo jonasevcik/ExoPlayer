@@ -15,9 +15,8 @@
  */
 package com.google.android.exoplayer2.metadata;
 
-// TODO: This class should implement SimpleDecoder.
 /**
- * Parses objects of type <T> from binary data.
+ * Decodes objects of type <T> from binary data.
  *
  * @param <T> The type of the metadata.
  */

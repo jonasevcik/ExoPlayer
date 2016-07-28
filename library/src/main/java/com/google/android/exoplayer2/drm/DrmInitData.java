@@ -38,10 +38,21 @@ public final class DrmInitData implements Comparator<SchemeData>, Parcelable {
   // Lazily initialized hashcode.
   private int hashCode;
 
+  /**
+   * Number of {@link SchemeData}s.
+   */
+  public final int schemeDataCount;
+
+  /**
+   * @param schemeDatas Scheme initialization data for possibly multiple DRM schemes.
+   */
   public DrmInitData(List<SchemeData> schemeDatas) {
     this(false, schemeDatas.toArray(new SchemeData[schemeDatas.size()]));
   }
 
+  /**
+   * @param schemeDatas Scheme initialization data for possibly multiple DRM schemes.
+   */
   public DrmInitData(SchemeData... schemeDatas) {
     this(true, schemeDatas);
   }
@@ -60,10 +71,12 @@ public final class DrmInitData implements Comparator<SchemeData>, Parcelable {
       }
     }
     this.schemeDatas = schemeDatas;
+    schemeDataCount = schemeDatas.length;
   }
 
   /* package */ DrmInitData(Parcel in) {
     schemeDatas = in.createTypedArray(SchemeData.CREATOR);
+    schemeDataCount = schemeDatas.length;
   }
 
   /**
@@ -79,6 +92,16 @@ public final class DrmInitData implements Comparator<SchemeData>, Parcelable {
       }
     }
     return null;
+  }
+
+  /**
+   * Retrieves the {@link SchemeData} at a given index.
+   *
+   * @param index index of the scheme to return.
+   * @return The {@link SchemeData} at the index.
+   */
+  public SchemeData get(int index) {
+    return schemeDatas[index];
   }
 
   @Override
@@ -154,6 +177,10 @@ public final class DrmInitData implements Comparator<SchemeData>, Parcelable {
      * The initialization data.
      */
     public final byte[] data;
+    /**
+     * Whether secure decryption is required.
+     */
+    public final boolean requiresSecureDecryption;
 
     /**
      * @param uuid The {@link UUID} of the DRM scheme, or {@link C#UUID_NIL} if the data is
@@ -162,22 +189,35 @@ public final class DrmInitData implements Comparator<SchemeData>, Parcelable {
      * @param data The initialization data.
      */
     public SchemeData(UUID uuid, String mimeType, byte[] data) {
+      this(uuid, mimeType, data, false);
+    }
+
+    /**
+     * @param uuid The {@link UUID} of the DRM scheme, or {@link C#UUID_NIL} if the data is
+     *     universal (i.e. applies to all schemes).
+     * @param mimeType The mimeType of the initialization data.
+     * @param data The initialization data.
+     * @param requiresSecureDecryption Whether secure decryption is required.
+     */
+    public SchemeData(UUID uuid, String mimeType, byte[] data, boolean requiresSecureDecryption) {
       this.uuid = Assertions.checkNotNull(uuid);
       this.mimeType = Assertions.checkNotNull(mimeType);
       this.data = Assertions.checkNotNull(data);
+      this.requiresSecureDecryption = requiresSecureDecryption;
     }
 
     /* package */ SchemeData(Parcel in) {
       uuid = new UUID(in.readLong(), in.readLong());
       mimeType = in.readString();
       data = in.createByteArray();
+      requiresSecureDecryption = in.readByte() != 0;
     }
 
     /**
      * Returns whether this initialization data applies to the specified scheme.
      *
      * @param schemeUuid The scheme {@link UUID}.
-     * @return True if this initialization data applies to the specified scheme. False otherwise.
+     * @return Whether this initialization data applies to the specified scheme.
      */
     public boolean matches(UUID schemeUuid) {
       return C.UUID_NIL.equals(uuid) || schemeUuid.equals(uuid);
@@ -220,6 +260,7 @@ public final class DrmInitData implements Comparator<SchemeData>, Parcelable {
       dest.writeLong(uuid.getLeastSignificantBits());
       dest.writeString(mimeType);
       dest.writeByteArray(data);
+      dest.writeByte((byte) (requiresSecureDecryption ? 1 : 0));
     }
 
     @SuppressWarnings("hiding")

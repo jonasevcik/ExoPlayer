@@ -20,6 +20,7 @@ import com.google.android.exoplayer2.ExoPlayer;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.SimpleExoPlayer;
 import com.google.android.exoplayer2.decoder.DecoderCounters;
+import com.google.android.exoplayer2.source.Timeline;
 
 import android.widget.TextView;
 
@@ -46,9 +47,8 @@ public final class DebugTextViewHelper implements Runnable, ExoPlayer.EventListe
   }
 
   /**
-   * Starts periodic updates of the {@link TextView}.
-   * <p>
-   * Should be called from the application's main thread.
+   * Starts periodic updates of the {@link TextView}. Must be called from the application's main
+   * thread.
    */
   public void start() {
     if (started) {
@@ -60,9 +60,8 @@ public final class DebugTextViewHelper implements Runnable, ExoPlayer.EventListe
   }
 
   /**
-   * Stops periodic updates of the {@link TextView}.
-   * <p>
-   * Should be called from the application's main thread.
+   * Stops periodic updates of the {@link TextView}. Must be called from the application's main
+   * thread.
    */
   public void stop() {
     if (!started) {
@@ -161,6 +160,11 @@ public final class DebugTextViewHelper implements Runnable, ExoPlayer.EventListe
   @Override
   public void onPositionDiscontinuity(int periodIndex, long positionMs) {
     updateTextView();
+  }
+
+  @Override
+  public void onTimelineChanged(Timeline timeline) {
+    // Do nothing.
   }
 
   @Override

@@ -22,8 +22,16 @@ import com.google.android.exoplayer2.RendererCapabilities;
 import com.google.android.exoplayer2.SimpleExoPlayer;
 import com.google.android.exoplayer2.decoder.DecoderCounters;
 import com.google.android.exoplayer2.drm.StreamingDrmSessionManager;
+import com.google.android.exoplayer2.metadata.MetadataRenderer;
+import com.google.android.exoplayer2.metadata.id3.ApicFrame;
+import com.google.android.exoplayer2.metadata.id3.GeobFrame;
+import com.google.android.exoplayer2.metadata.id3.Id3Frame;
+import com.google.android.exoplayer2.metadata.id3.PrivFrame;
+import com.google.android.exoplayer2.metadata.id3.TextInformationFrame;
+import com.google.android.exoplayer2.metadata.id3.TxxxFrame;
 import com.google.android.exoplayer2.source.AdaptiveMediaSourceEventListener;
 import com.google.android.exoplayer2.source.ExtractorMediaSource;
+import com.google.android.exoplayer2.source.Timeline;
 import com.google.android.exoplayer2.source.TrackGroup;
 import com.google.android.exoplayer2.source.TrackGroupArray;
 import com.google.android.exoplayer2.trackselection.MappingTrackSelector;
@@ -36,14 +44,16 @@ import android.util.Log;
 
 import java.io.IOException;
 import java.text.NumberFormat;
+import java.util.List;
 import java.util.Locale;
 
 /**
  * Logs player events using {@link Log}.
  */
-public class EventLogger implements ExoPlayer.EventListener, SimpleExoPlayer.DebugListener,
-    AdaptiveMediaSourceEventListener, ExtractorMediaSource.EventListener,
-    StreamingDrmSessionManager.EventListener, MappingTrackSelector.EventListener {
+/* package */ final class EventLogger implements ExoPlayer.EventListener,
+    SimpleExoPlayer.DebugListener, AdaptiveMediaSourceEventListener,
+    ExtractorMediaSource.EventListener, StreamingDrmSessionManager.EventListener,
+    MappingTrackSelector.EventListener, MetadataRenderer.Output<List<Id3Frame>> {
 
   private static final String TAG = "EventLogger";
   private static final NumberFormat TIME_FORMAT;
@@ -53,15 +63,10 @@ public class EventLogger implements ExoPlayer.EventListener, SimpleExoPlayer.Deb
     TIME_FORMAT.setMaximumFractionDigits(2);
   }
 
-  private long sessionStartTimeMs;
+  private final long startTimeMs;
 
-  public void startSession() {
-    sessionStartTimeMs = SystemClock.elapsedRealtime();
-    Log.d(TAG, "start [0]");
-  }
-
-  public void endSession() {
-    Log.d(TAG, "end [" + getSessionTimeString() + "]");
+  public EventLogger() {
+    startTimeMs = SystemClock.elapsedRealtime();
   }
 
   // ExoPlayer.EventListener
@@ -88,6 +93,14 @@ public class EventLogger implements ExoPlayer.EventListener, SimpleExoPlayer.Deb
   }
 
   @Override
+  public void onTimelineChanged(Timeline timeline) {
+    boolean isFinal = timeline.isFinal();
+    int periodCount = timeline.getPeriodCount();
+    Log.d(TAG, "timelineChanged [" + isFinal + ", "
+        + (periodCount == Timeline.UNKNOWN_PERIOD_COUNT ? "?" : periodCount) + "]");
+  }
+
+  @Override
   public void onPlayerError(ExoPlaybackException e) {
     Log.e(TAG, "playerFailed [" + getSessionTimeString() + "]", e);
   }
@@ -109,7 +122,7 @@ public class EventLogger implements ExoPlayer.EventListener, SimpleExoPlayer.Deb
               trackGroup.length, trackInfo.getAdaptiveSupport(rendererIndex, groupIndex, false));
           Log.d(TAG, "    Group:" + groupIndex + ", adaptive_supported=" + adaptiveSupport + " [");
           for (int trackIndex = 0; trackIndex < trackGroup.length; trackIndex++) {
-            String status = getTrackStatusString(trackSelection, groupIndex, trackIndex);
+            String status = getTrackStatusString(trackSelection, trackGroup, trackIndex);
             String formatSupport = getFormatSupportString(
                 trackInfo.getTrackFormatSupport(rendererIndex, groupIndex, trackIndex));
             Log.d(TAG, "      " + status + " Track:" + trackIndex + ", "
@@ -141,6 +154,36 @@ public class EventLogger implements ExoPlayer.EventListener, SimpleExoPlayer.Deb
       Log.d(TAG, "  ]");
     }
     Log.d(TAG, "]");
+  }
+
+  // MetadataRenderer.Output<List<Id3Frame>>
+
+  @Override
+  public void onMetadata(List<Id3Frame> id3Frames) {
+    for (Id3Frame id3Frame : id3Frames) {
+      if (id3Frame instanceof TxxxFrame) {
+        TxxxFrame txxxFrame = (TxxxFrame) id3Frame;
+        Log.i(TAG, String.format("ID3 TimedMetadata %s: description=%s, value=%s", txxxFrame.id,
+            txxxFrame.description, txxxFrame.value));
+      } else if (id3Frame instanceof PrivFrame) {
+        PrivFrame privFrame = (PrivFrame) id3Frame;
+        Log.i(TAG, String.format("ID3 TimedMetadata %s: owner=%s", privFrame.id, privFrame.owner));
+      } else if (id3Frame instanceof GeobFrame) {
+        GeobFrame geobFrame = (GeobFrame) id3Frame;
+        Log.i(TAG, String.format("ID3 TimedMetadata %s: mimeType=%s, filename=%s, description=%s",
+            geobFrame.id, geobFrame.mimeType, geobFrame.filename, geobFrame.description));
+      } else if (id3Frame instanceof ApicFrame) {
+        ApicFrame apicFrame = (ApicFrame) id3Frame;
+        Log.i(TAG, String.format("ID3 TimedMetadata %s: mimeType=%s, description=%s",
+            apicFrame.id, apicFrame.mimeType, apicFrame.description));
+      } else if (id3Frame instanceof TextInformationFrame) {
+        TextInformationFrame textInformationFrame = (TextInformationFrame) id3Frame;
+        Log.i(TAG, String.format("ID3 TimedMetadata %s: description=%s", textInformationFrame.id,
+            textInformationFrame.description));
+      } else {
+        Log.i(TAG, String.format("ID3 TimedMetadata %s", id3Frame.id));
+      }
+    }
   }
 
   // SimpleExoPlayer.DebugListener
@@ -227,30 +270,30 @@ public class EventLogger implements ExoPlayer.EventListener, SimpleExoPlayer.Deb
   // AdaptiveMediaSourceEventListener
 
   @Override
-  public void onLoadStarted(DataSpec dataSpec, int dataType, int trackType, Format format,
-      int formatEvaluatorTrigger, Object formatEvaluatorData, long mediaStartTimeMs,
+  public void onLoadStarted(DataSpec dataSpec, int dataType, int trackType, Format trackFormat,
+      int trackSelectionReason, Object trackSelectionData, long mediaStartTimeMs,
       long mediaEndTimeMs, long elapsedRealtimeMs) {
     // Do nothing.
   }
 
   @Override
-  public void onLoadError(DataSpec dataSpec, int dataType, int trackType, Format format,
-      int formatEvaluatorTrigger, Object formatEvaluatorData, long mediaStartTimeMs,
+  public void onLoadError(DataSpec dataSpec, int dataType, int trackType, Format trackFormat,
+      int trackSelectionReason, Object trackSelectionData, long mediaStartTimeMs,
       long mediaEndTimeMs, long elapsedRealtimeMs, long loadDurationMs, long bytesLoaded,
       IOException error, boolean wasCanceled) {
     printInternalError("loadError", error);
   }
 
   @Override
-  public void onLoadCanceled(DataSpec dataSpec, int dataType, int trackType, Format format,
-      int formatEvaluatorTrigger, Object formatEvaluatorData, long mediaStartTimeMs,
+  public void onLoadCanceled(DataSpec dataSpec, int dataType, int trackType, Format trackFormat,
+      int trackSelectionReason, Object trackSelectionData, long mediaStartTimeMs,
       long mediaEndTimeMs, long elapsedRealtimeMs, long loadDurationMs, long bytesLoaded) {
     // Do nothing.
   }
 
   @Override
-  public void onLoadCompleted(DataSpec dataSpec, int dataType, int trackType, Format format,
-      int formatEvaluatorTrigger, Object formatEvaluatorData, long mediaStartTimeMs,
+  public void onLoadCompleted(DataSpec dataSpec, int dataType, int trackType, Format trackFormat,
+      int trackSelectionReason, Object trackSelectionData, long mediaStartTimeMs,
       long mediaEndTimeMs, long elapsedRealtimeMs, long loadDurationMs, long bytesLoaded) {
     // Do nothing.
   }
@@ -261,8 +304,8 @@ public class EventLogger implements ExoPlayer.EventListener, SimpleExoPlayer.Deb
   }
 
   @Override
-  public void onDownstreamFormatChanged(int trackType, Format format, int formatEvaluatorTrigger,
-      Object formatEvaluatorData, long mediaTimeMs) {
+  public void onDownstreamFormatChanged(int trackType, Format trackFormat, int trackSelectionReason,
+      Object trackSelectionData, long mediaTimeMs) {
     // Do nothing.
   }
 
@@ -273,7 +316,7 @@ public class EventLogger implements ExoPlayer.EventListener, SimpleExoPlayer.Deb
   }
 
   private String getSessionTimeString() {
-    return getTimeString(SystemClock.elapsedRealtime() - sessionStartTimeMs);
+    return getTimeString(SystemClock.elapsedRealtime() - startTimeMs);
   }
 
   private static String getTimeString(long timeMs) {
@@ -353,17 +396,10 @@ public class EventLogger implements ExoPlayer.EventListener, SimpleExoPlayer.Deb
     return builder.toString();
   }
 
-  private static String getTrackStatusString(TrackSelection selection, int groupIndex,
+  private static String getTrackStatusString(TrackSelection selection, TrackGroup group,
       int trackIndex) {
-    boolean groupEnabled = selection != null && selection.group == groupIndex;
-    if (groupEnabled) {
-      for (int i = 0; i < selection.length; i++) {
-        if (selection.getTrack(i) == trackIndex) {
-          return getTrackStatusString(true);
-        }
-      }
-    }
-    return getTrackStatusString(false);
+    return getTrackStatusString(selection != null && selection.getTrackGroup() == group
+        && selection.indexOf(trackIndex) != -1);
   }
 
   private static String getTrackStatusString(boolean enabled) {

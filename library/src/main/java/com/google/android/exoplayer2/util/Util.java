@@ -20,8 +20,12 @@ import com.google.android.exoplayer2.ExoPlayerLibraryInfo;
 import com.google.android.exoplayer2.upstream.DataSource;
 import com.google.android.exoplayer2.upstream.DataSpec;
 
+import android.Manifest.permission;
+import android.annotation.TargetApi;
+import android.app.Activity;
 import android.content.Context;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.net.Uri;
 import android.os.Build;
@@ -31,9 +35,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.lang.reflect.Method;
 import java.math.BigDecimal;
-import java.net.HttpURLConnection;
 import java.text.ParseException;
 import java.util.Arrays;
 import java.util.Calendar;
@@ -111,8 +113,6 @@ public final class Util {
 
   private static final Pattern ESCAPED_CHARACTER_PATTERN = Pattern.compile("%([A-Fa-f0-9]{2})");
 
-  private static final long MAX_BYTES_TO_DRAIN = 2048;
-
   private Util() {}
 
   /**
@@ -131,6 +131,31 @@ public final class Util {
       outputStream.write(buffer, 0, bytesRead);
     }
     return outputStream.toByteArray();
+  }
+
+  /**
+   * Checks whether it's necessary to request the {@link permission#READ_EXTERNAL_STORAGE}
+   * permission read the specified {@link Uri}s, requesting the permission if necessary.
+   *
+   * @param uris {@link Uri}s that may require {@link permission#READ_EXTERNAL_STORAGE} to read.
+   * @return Whether a permission request was made.
+   */
+  @TargetApi(23)
+  public static boolean maybeRequestReadExternalStoragePermission(Activity activity, Uri... uris) {
+    if (Util.SDK_INT < 23) {
+      return false;
+    }
+    for (Uri uri : uris) {
+      if (Util.isLocalFileUri(uri)) {
+        if (activity.checkSelfPermission(permission.READ_EXTERNAL_STORAGE)
+            != PackageManager.PERMISSION_GRANTED) {
+          activity.requestPermissions(new String[] {permission.READ_EXTERNAL_STORAGE}, 0);
+          return true;
+        }
+        break;
+      }
+    }
+    return false;
   }
 
   /**
@@ -257,6 +282,26 @@ public final class Util {
    */
   public static int constrainValue(int value, int min, int max) {
     return Math.max(min, Math.min(value, max));
+  }
+
+  /**
+   * Returns the index of the largest value in an array that is less than (or optionally equal to)
+   * a specified key.
+   * <p>
+   * The search is performed using a binary search algorithm, and so the array must be sorted.
+   *
+   * @param a The array to search.
+   * @param key The key being searched for.
+   * @param inclusive If the key is present in the array, whether to return the corresponding index.
+   *     If false then the returned index corresponds to the largest value in the array that is
+   *     strictly less than the key.
+   * @param stayInBounds If true, then 0 will be returned in the case that the key is smaller than
+   *     the smallest value in the array. If false then -1 will be returned.
+   */
+  public static int binarySearchFloor(int[] a, int key, boolean inclusive, boolean stayInBounds) {
+    int index = Arrays.binarySearch(a, key);
+    index = index < 0 ? -(index + 2) : (inclusive ? index : (index - 1));
+    return stayInBounds ? Math.max(0, index) : index;
   }
 
   /**
@@ -520,50 +565,6 @@ public final class Util {
       intArray[i] = list.get(i);
     }
     return intArray;
-  }
-
-  /**
-   * On platform API levels 19 and 20, okhttp's implementation of {@link InputStream#close} can
-   * block for a long time if the stream has a lot of data remaining. Call this method before
-   * closing the input stream to make a best effort to cause the input stream to encounter an
-   * unexpected end of input, working around this issue. On other platform API levels, the method
-   * does nothing.
-   *
-   * @param connection The connection whose {@link InputStream} should be terminated.
-   * @param bytesRemaining The number of bytes remaining to be read from the input stream if its
-   *     length is known. {@link C#LENGTH_UNBOUNDED} otherwise.
-   */
-  public static void maybeTerminateInputStream(HttpURLConnection connection, long bytesRemaining) {
-    if (SDK_INT != 19 && SDK_INT != 20) {
-      return;
-    }
-
-    try {
-      InputStream inputStream = connection.getInputStream();
-      if (bytesRemaining == C.LENGTH_UNBOUNDED) {
-        // If the input stream has already ended, do nothing. The socket may be re-used.
-        if (inputStream.read() == -1) {
-          return;
-        }
-      } else if (bytesRemaining <= MAX_BYTES_TO_DRAIN) {
-        // There isn't much data left. Prefer to allow it to drain, which may allow the socket to be
-        // re-used.
-        return;
-      }
-      String className = inputStream.getClass().getName();
-      if (className.equals("com.android.okhttp.internal.http.HttpTransport$ChunkedInputStream")
-          || className.equals(
-              "com.android.okhttp.internal.http.HttpTransport$FixedLengthInputStream")) {
-        Class<?> superclass = inputStream.getClass().getSuperclass();
-        Method unexpectedEndOfInput = superclass.getDeclaredMethod("unexpectedEndOfInput");
-        unexpectedEndOfInput.setAccessible(true);
-        unexpectedEndOfInput.invoke(inputStream);
-      }
-    } catch (Exception e) {
-      // If an IOException then the connection didn't ever have an input stream, or it was closed
-      // already. If another type of exception then something went wrong, most likely the device
-      // isn't using okhttp.
-    }
   }
 
   /**

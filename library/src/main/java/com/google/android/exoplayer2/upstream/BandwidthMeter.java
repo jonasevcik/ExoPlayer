@@ -18,23 +18,26 @@ package com.google.android.exoplayer2.upstream;
 /**
  * Provides estimates of the currently available bandwidth.
  */
-public interface BandwidthMeter extends TransferListener {
+public interface BandwidthMeter {
 
   /**
-   * Interface definition for a callback to be notified of {@link BandwidthMeter} events.
+   * A listener of {@link BandwidthMeter} events.
    */
   interface EventListener {
 
     /**
-     * Invoked periodically to indicate that bytes have been transferred.
+     * Called periodically to indicate that bytes have been transferred.
+     * <p>
+     * Note: The estimated bitrate is typically derived from more information than just
+     * {@code bytes} and {@code elapsedMs}.
      *
      * @param elapsedMs The time taken to transfer the bytes, in milliseconds.
      * @param bytes The number of bytes transferred.
-     * @param bitrate The estimated bitrate in bits/sec, or {@link #NO_ESTIMATE} if no estimate
-     *     is available. Note that this estimate is typically derived from more information than
-     *     {@code bytes} and {@code elapsedMs}.
+     * @param bitrate The estimated bitrate in bits/sec, or {@link #NO_ESTIMATE} if an estimate is
+     *     not available.
      */
     void onBandwidthSample(int elapsedMs, long bytes, long bitrate);
+
   }
 
   /**
@@ -43,9 +46,8 @@ public interface BandwidthMeter extends TransferListener {
   long NO_ESTIMATE = -1;
 
   /**
-   * Gets the estimated bandwidth, in bits/sec.
-   *
-   * @return Estimated bandwidth in bits/sec, or {@link #NO_ESTIMATE} if no estimate is available.
+   * Returns the estimated bandwidth in bits/sec, or {@link #NO_ESTIMATE} if an estimate is not
+   * available.
    */
   long getBitrateEstimate();
 

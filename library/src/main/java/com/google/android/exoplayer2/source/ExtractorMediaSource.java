@@ -33,9 +33,7 @@ import com.google.android.exoplayer2.extractor.SeekMap;
 import com.google.android.exoplayer2.extractor.TrackOutput;
 import com.google.android.exoplayer2.trackselection.TrackSelection;
 import com.google.android.exoplayer2.upstream.Allocator;
-import com.google.android.exoplayer2.upstream.BandwidthMeter;
 import com.google.android.exoplayer2.upstream.DataSource;
-import com.google.android.exoplayer2.upstream.DataSourceFactory;
 import com.google.android.exoplayer2.upstream.DataSpec;
 import com.google.android.exoplayer2.upstream.Loader;
 import com.google.android.exoplayer2.upstream.Loader.Loadable;
@@ -68,12 +66,12 @@ public final class ExtractorMediaSource implements MediaPeriod, MediaSource,
     UpstreamFormatChangedListener {
 
   /**
-   * Interface definition for a callback to be notified of {@link ExtractorMediaSource} events.
+   * Listener of {@link ExtractorMediaSource} events.
    */
   public interface EventListener {
 
     /**
-     * Invoked when an error occurs loading media data.
+     * Called when an error occurs loading media data.
      *
      * @param error The load error.
      */
@@ -112,8 +110,7 @@ public final class ExtractorMediaSource implements MediaPeriod, MediaSource,
   private static final long DEFAULT_LAST_SAMPLE_DURATION_US = 10000;
 
   private final Uri uri;
-  private final DataSourceFactory dataSourceFactory;
-  private final BandwidthMeter bandwidthMeter;
+  private final DataSource.Factory dataSourceFactory;
   private final ExtractorsFactory extractorsFactory;
   private final int minLoadableRetryCount;
   private final Handler eventHandler;
@@ -148,23 +145,20 @@ public final class ExtractorMediaSource implements MediaPeriod, MediaSource,
   /**
    * @param uri The {@link Uri} of the media stream.
    * @param dataSourceFactory A factory for {@link DataSource}s to read the media.
-   * @param bandwidthMeter A {@link BandwidthMeter} to notify of loads performed by the source.
    * @param extractorsFactory Factory for {@link Extractor}s to process the media stream. If the
    *     possible formats are known, pass a factory that instantiates extractors for those formats.
    *     Otherwise, pass a {@link DefaultExtractorsFactory} to use default extractors.
    * @param eventListener A listener of events. May be null if delivery of events is not required.
    */
-  public ExtractorMediaSource(Uri uri, DataSourceFactory dataSourceFactory,
-      BandwidthMeter bandwidthMeter, ExtractorsFactory extractorsFactory, Handler eventHandler,
-      EventListener eventListener) {
-    this(uri, dataSourceFactory, bandwidthMeter, extractorsFactory,
-        MIN_RETRY_COUNT_DEFAULT_FOR_MEDIA, eventHandler, eventListener);
+  public ExtractorMediaSource(Uri uri, DataSource.Factory dataSourceFactory,
+      ExtractorsFactory extractorsFactory, Handler eventHandler, EventListener eventListener) {
+    this(uri, dataSourceFactory, extractorsFactory, MIN_RETRY_COUNT_DEFAULT_FOR_MEDIA, eventHandler,
+        eventListener);
   }
 
   /**
    * @param uri The {@link Uri} of the media stream.
    * @param dataSourceFactory A factory for {@link DataSource}s to read the media.
-   * @param bandwidthMeter A {@link BandwidthMeter} to notify of loads performed by the source.
    * @param extractorsFactory Factory for {@link Extractor}s to process the media stream. If the
    *     possible formats are known, pass a factory that instantiates extractors for those formats.
    *     Otherwise, pass a {@link DefaultExtractorsFactory} to use default extractors.
@@ -172,12 +166,11 @@ public final class ExtractorMediaSource implements MediaPeriod, MediaSource,
    *     if a loading error occurs.
    * @param eventListener A listener of events. May be null if delivery of events is not required.
    */
-  public ExtractorMediaSource(Uri uri, DataSourceFactory dataSourceFactory,
-      BandwidthMeter bandwidthMeter, ExtractorsFactory extractorsFactory, int minLoadableRetryCount,
-      Handler eventHandler, EventListener eventListener) {
+  public ExtractorMediaSource(Uri uri, DataSource.Factory dataSourceFactory,
+      ExtractorsFactory extractorsFactory, int minLoadableRetryCount, Handler eventHandler,
+      EventListener eventListener) {
     this.uri = uri;
     this.dataSourceFactory = dataSourceFactory;
-    this.bandwidthMeter = bandwidthMeter;
     this.extractorsFactory = extractorsFactory;
     this.minLoadableRetryCount = minLoadableRetryCount;
     this.eventHandler = eventHandler;
@@ -187,13 +180,13 @@ public final class ExtractorMediaSource implements MediaPeriod, MediaSource,
   // MediaSource implementation.
 
   @Override
-  public void prepareSource() {
-    // do nothing
+  public void prepareSource(InvalidationListener listener) {
+    listener.onTimelineChanged(new SinglePeriodTimeline(this));
   }
 
   @Override
-  public int getPeriodCount() {
-    return 1;
+  public int getNewPlayingPeriodIndex(int oldPlayingPeriodIndex, Timeline oldTimeline) {
+    return oldPlayingPeriodIndex;
   }
 
   @Override
@@ -214,7 +207,7 @@ public final class ExtractorMediaSource implements MediaPeriod, MediaSource,
     this.callback = callback;
     this.allocator = allocator;
 
-    dataSource = dataSourceFactory.createDataSource(bandwidthMeter);
+    dataSource = dataSourceFactory.createDataSource();
     loader = new Loader("Loader:ExtractorMediaSource");
     extractorHolder = new ExtractorHolder(extractorsFactory.createExtractors(), this);
     loadCondition = new ConditionVariable();
@@ -257,9 +250,9 @@ public final class ExtractorMediaSource implements MediaPeriod, MediaSource,
     SampleStream[] newStreams = new SampleStream[newSelections.size()];
     for (int i = 0; i < newStreams.length; i++) {
       TrackSelection selection = newSelections.get(i);
-      Assertions.checkState(selection.length == 1);
-      Assertions.checkState(selection.getTrack(0) == 0);
-      int track = selection.group;
+      Assertions.checkState(selection.length() == 1);
+      Assertions.checkState(selection.getIndexInTrackGroup(0) == 0);
+      int track = tracks.indexOf(selection.getTrackGroup());
       Assertions.checkState(!trackEnabledStates[track]);
       enabledTrackCount++;
       trackEnabledStates[track] = true;
@@ -615,6 +608,11 @@ public final class ExtractorMediaSource implements MediaPeriod, MediaSource,
     @Override
     public int readData(FormatHolder formatHolder, DecoderInputBuffer buffer) {
       return ExtractorMediaSource.this.readData(track, formatHolder, buffer);
+    }
+
+    @Override
+    public void skipToKeyframeBefore(long timeUs) {
+      sampleQueues[track].skipToKeyframeBefore(timeUs);
     }
 
   }

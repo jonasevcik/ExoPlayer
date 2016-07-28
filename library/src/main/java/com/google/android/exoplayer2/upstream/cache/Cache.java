@@ -25,12 +25,12 @@ import java.util.Set;
 public interface Cache {
 
   /**
-   * Interface definition for a callback to be notified of {@link Cache} events.
+   * Listener of {@link Cache} events.
    */
   interface Listener {
 
     /**
-     * Invoked when a {@link CacheSpan} is added to the cache.
+     * Called when a {@link CacheSpan} is added to the cache.
      *
      * @param cache The source of the event.
      * @param span The added {@link CacheSpan}.
@@ -38,7 +38,7 @@ public interface Cache {
     void onSpanAdded(Cache cache, CacheSpan span);
 
     /**
-     * Invoked when a {@link CacheSpan} is removed from the cache.
+     * Called when a {@link CacheSpan} is removed from the cache.
      *
      * @param cache The source of the event.
      * @param span The removed {@link CacheSpan}.
@@ -46,12 +46,12 @@ public interface Cache {
     void onSpanRemoved(Cache cache, CacheSpan span);
 
     /**
-     * Invoked when an existing {@link CacheSpan} is accessed, causing it to be replaced. The new
+     * Called when an existing {@link CacheSpan} is accessed, causing it to be replaced. The new
      * {@link CacheSpan} is guaranteed to represent the same data as the one it replaces, however
      * {@link CacheSpan#file} and {@link CacheSpan#lastAccessTimestamp} may have changed.
      * <p>
      * Note that for span replacement, {@link #onSpanAdded(Cache, CacheSpan)} and
-     * {@link #onSpanRemoved(Cache, CacheSpan)} are not invoked in addition to this method.
+     * {@link #onSpanRemoved(Cache, CacheSpan)} are not called in addition to this method.
      *
      * @param cache The source of the event.
      * @param oldSpan The old {@link CacheSpan}, which has been removed from the cache.
@@ -64,9 +64,9 @@ public interface Cache {
   /**
    * Registers a listener to listen for changes to a given key.
    * <p>
-   * No guarantees are made about the thread or threads on which the listener is invoked, but it
-   * is guaranteed that listener methods will be invoked in a serial fashion (i.e. one at a time)
-   * and in the same order as events occurred.
+   * No guarantees are made about the thread or threads on which the listener is called, but it is
+   * guaranteed that listener methods will be called in a serial fashion (i.e. one at a time) and in
+   * the same order as events occurred.
    *
    * @param key The key to listen to.
    * @param listener The listener to add.

@@ -22,7 +22,6 @@ import com.google.android.exoplayer2.decoder.DecoderInputBuffer;
 import com.google.android.exoplayer2.trackselection.TrackSelection;
 import com.google.android.exoplayer2.upstream.Allocator;
 import com.google.android.exoplayer2.upstream.DataSource;
-import com.google.android.exoplayer2.upstream.DataSourceFactory;
 import com.google.android.exoplayer2.upstream.DataSpec;
 import com.google.android.exoplayer2.upstream.Loader;
 import com.google.android.exoplayer2.upstream.Loader.Loadable;
@@ -42,12 +41,12 @@ public final class SingleSampleMediaSource implements MediaPeriod, MediaSource, 
     Loader.Callback<SingleSampleMediaSource.SourceLoadable> {
 
   /**
-   * Interface definition for a callback to be notified of {@link SingleSampleMediaSource} events.
+   * Listener of {@link SingleSampleMediaSource} events.
    */
   public interface EventListener {
 
     /**
-     * Invoked when an error occurs loading media data.
+     * Called when an error occurs loading media data.
      *
      * @param sourceId The id of the reporting {@link SingleSampleMediaSource}.
      * @param e The cause of the failure.
@@ -71,7 +70,7 @@ public final class SingleSampleMediaSource implements MediaPeriod, MediaSource, 
   private static final int STREAM_STATE_END_OF_STREAM = 2;
 
   private final Uri uri;
-  private final DataSourceFactory dataSourceFactory;
+  private final DataSource.Factory dataSourceFactory;
   private final Format format;
   private final long durationUs;
   private final int minLoadableRetryCount;
@@ -87,17 +86,17 @@ public final class SingleSampleMediaSource implements MediaPeriod, MediaSource, 
   private byte[] sampleData;
   private int sampleSize;
 
-  public SingleSampleMediaSource(Uri uri, DataSourceFactory dataSourceFactory, Format format,
+  public SingleSampleMediaSource(Uri uri, DataSource.Factory dataSourceFactory, Format format,
       long durationUs) {
     this(uri, dataSourceFactory, format, durationUs, DEFAULT_MIN_LOADABLE_RETRY_COUNT);
   }
 
-  public SingleSampleMediaSource(Uri uri, DataSourceFactory dataSourceFactory, Format format,
+  public SingleSampleMediaSource(Uri uri, DataSource.Factory dataSourceFactory, Format format,
       long durationUs, int minLoadableRetryCount) {
     this(uri, dataSourceFactory, format, durationUs, minLoadableRetryCount, null, null, 0);
   }
 
-  public SingleSampleMediaSource(Uri uri, DataSourceFactory dataSourceFactory, Format format,
+  public SingleSampleMediaSource(Uri uri, DataSource.Factory dataSourceFactory, Format format,
       long durationUs, int minLoadableRetryCount, Handler eventHandler, EventListener eventListener,
       int eventSourceId) {
     this.uri = uri;
@@ -116,13 +115,13 @@ public final class SingleSampleMediaSource implements MediaPeriod, MediaSource, 
   // MediaSource implementation.
 
   @Override
-  public void prepareSource() {
-    // do nothing
+  public void prepareSource(InvalidationListener listener) {
+    listener.onTimelineChanged(new SinglePeriodTimeline(this));
   }
 
   @Override
-  public int getPeriodCount() {
-    return 1;
+  public int getNewPlayingPeriodIndex(int oldPlayingPeriodIndex, Timeline oldTimeline) {
+    return oldPlayingPeriodIndex;
   }
 
   @Override
@@ -252,6 +251,11 @@ public final class SingleSampleMediaSource implements MediaPeriod, MediaSource, 
       streamState = STREAM_STATE_END_OF_STREAM;
       return C.RESULT_BUFFER_READ;
     }
+  }
+
+  @Override
+  public void skipToKeyframeBefore(long timeUs) {
+    // do nothing
   }
 
   // Loader.Callback implementation.

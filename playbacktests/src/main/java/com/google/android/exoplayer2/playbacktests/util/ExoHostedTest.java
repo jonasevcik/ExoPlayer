@@ -15,6 +15,7 @@
  */
 package com.google.android.exoplayer2.playbacktests.util;
 
+import com.google.android.exoplayer2.DefaultLoadControl;
 import com.google.android.exoplayer2.ExoPlaybackException;
 import com.google.android.exoplayer2.ExoPlayer;
 import com.google.android.exoplayer2.ExoPlayerFactory;
@@ -22,22 +23,24 @@ import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.SimpleExoPlayer;
 import com.google.android.exoplayer2.audio.AudioTrack;
 import com.google.android.exoplayer2.decoder.DecoderCounters;
+import com.google.android.exoplayer2.drm.DrmSessionManager;
 import com.google.android.exoplayer2.playbacktests.util.HostActivity.HostedTest;
 import com.google.android.exoplayer2.source.MediaSource;
+import com.google.android.exoplayer2.source.Timeline;
+import com.google.android.exoplayer2.trackselection.AdaptiveVideoTrackSelection;
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
 import com.google.android.exoplayer2.trackselection.MappingTrackSelector;
 import com.google.android.exoplayer2.upstream.BandwidthMeter;
-import com.google.android.exoplayer2.upstream.DataSourceFactory;
 import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter;
-import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory;
+import com.google.android.exoplayer2.upstream.TransferListener;
 import com.google.android.exoplayer2.util.Util;
 
 import android.os.Handler;
 import android.os.SystemClock;
 import android.util.Log;
 import android.view.Surface;
-
 import junit.framework.Assert;
+
 
 /**
  * A {@link HostedTest} for {@link ExoPlayer} playback tests.
@@ -95,8 +98,7 @@ public abstract class ExoHostedTest implements HostedTest, ExoPlayer.EventListen
    *     expected playing time equals the duration of the media being played. Else
    *     {@link #EXPECTED_PLAYING_TIME_UNSET} should be passed to indicate that the test should not
    *     assert an expected playing time.
-   * @param failOnPlayerError True if a player error should be considered a test failure. False
-   *     otherwise.
+   * @param failOnPlayerError Whether a player error should be considered a test failure.
    */
   public ExoHostedTest(String tag, long expectedPlayingTimeMs, boolean failOnPlayerError) {
     this.tag = tag;
@@ -124,12 +126,12 @@ public abstract class ExoHostedTest implements HostedTest, ExoPlayer.EventListen
   @Override
   public final void onStart(HostActivity host, Surface surface) {
     // Build the player.
-    trackSelector = buildTrackSelector(host);
-    player = buildExoPlayer(host, surface, trackSelector);
-    DataSourceFactory dataSourceFactory = new DefaultDataSourceFactory(host, Util
-        .getUserAgent(host, "ExoPlayerPlaybackTests"));
-    BandwidthMeter bandwidthMeter = new DefaultBandwidthMeter();
-    player.setMediaSource(buildSource(host, dataSourceFactory, bandwidthMeter));
+    DefaultBandwidthMeter bandwidthMeter = new DefaultBandwidthMeter();
+    trackSelector = buildTrackSelector(host, bandwidthMeter);
+    String userAgent = "ExoPlayerPlaybackTests";
+    DrmSessionManager drmSessionManager = buildDrmSessionManager(userAgent);
+    player = buildExoPlayer(host, surface, trackSelector, drmSessionManager);
+    player.setMediaSource(buildSource(host, Util.getUserAgent(host, userAgent), bandwidthMeter));
     player.addListener(this);
     player.setDebugListener(this);
     player.setPlayWhenReady(true);
@@ -215,6 +217,11 @@ public abstract class ExoHostedTest implements HostedTest, ExoPlayer.EventListen
     // Do nothing.
   }
 
+  @Override
+  public final void onTimelineChanged(Timeline timeline) {
+    // Do nothing.
+  }
+
   // SimpleExoPlayer.DebugListener
 
   @Override
@@ -279,22 +286,29 @@ public abstract class ExoHostedTest implements HostedTest, ExoPlayer.EventListen
 
   // Internal logic
 
+  protected DrmSessionManager buildDrmSessionManager(String userAgent) {
+    // Do nothing. Interested subclasses may override.
+    return null;
+  }
+
   @SuppressWarnings("unused")
-  protected MappingTrackSelector buildTrackSelector(HostActivity host) {
-    return new DefaultTrackSelector(null);
+  protected MappingTrackSelector buildTrackSelector(HostActivity host,
+      BandwidthMeter bandwidthMeter) {
+    return new DefaultTrackSelector(null, new AdaptiveVideoTrackSelection.Factory(bandwidthMeter));
   }
 
   @SuppressWarnings("unused")
   protected SimpleExoPlayer buildExoPlayer(HostActivity host, Surface surface,
-      MappingTrackSelector trackSelector) {
-    SimpleExoPlayer player = ExoPlayerFactory.newSimpleInstance(host, trackSelector);
-    player.setSurface(surface);
+      MappingTrackSelector trackSelector, DrmSessionManager drmSessionManager) {
+    SimpleExoPlayer player = ExoPlayerFactory.newSimpleInstance(host, trackSelector,
+        new DefaultLoadControl(), drmSessionManager);
+    player.setVideoSurface(surface);
     return player;
   }
 
   @SuppressWarnings("unused")
-  protected abstract MediaSource buildSource(HostActivity host, DataSourceFactory dataSourceFactory,
-      BandwidthMeter bandwidthMeter);
+  protected abstract MediaSource buildSource(HostActivity host, String userAgent,
+      TransferListener mediaTransferListener);
 
   @SuppressWarnings("unused")
   protected void onPlayerErrorInternal(ExoPlaybackException error) {

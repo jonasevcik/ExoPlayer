@@ -41,7 +41,7 @@ import android.os.SystemClock;
 import java.nio.ByteBuffer;
 
 /**
- * Decodes and renders audio using {@link MediaCodec} and {@link android.media.AudioTrack}.
+ * Decodes and renders audio using {@link MediaCodec} and {@link AudioTrack}.
  */
 @TargetApi(16)
 public class MediaCodecAudioRenderer extends MediaCodecRenderer implements MediaClock {
@@ -132,15 +132,10 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
       DrmSessionManager drmSessionManager, boolean playClearSamplesWithoutKeys,
       Handler eventHandler, AudioRendererEventListener eventListener,
       AudioCapabilities audioCapabilities, int streamType) {
-    super(mediaCodecSelector, drmSessionManager, playClearSamplesWithoutKeys);
+    super(C.TRACK_TYPE_AUDIO, mediaCodecSelector, drmSessionManager, playClearSamplesWithoutKeys);
     audioSessionId = AudioTrack.SESSION_ID_NOT_SET;
     audioTrack = new AudioTrack(audioCapabilities, streamType);
     eventDispatcher = new EventDispatcher(eventHandler, eventListener);
-  }
-
-  @Override
-  public int getTrackType() {
-    return C.TRACK_TYPE_AUDIO;
   }
 
   @Override
@@ -153,8 +148,7 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
     if (allowPassthrough(mimeType) && mediaCodecSelector.getPassthroughDecoderInfo() != null) {
       return ADAPTIVE_NOT_SEAMLESS | FORMAT_HANDLED;
     }
-    MediaCodecInfo decoderInfo = mediaCodecSelector.getDecoderInfo(mimeType,
-        format.requiresSecureDecryption);
+    MediaCodecInfo decoderInfo = mediaCodecSelector.getDecoderInfo(mimeType, false);
     if (decoderInfo == null) {
       return FORMAT_UNSUPPORTED_SUBTYPE;
     }
@@ -188,7 +182,7 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
    * passthrough is supported.
    *
    * @param mimeType The type of input media.
-   * @return True if passthrough playback should be used. False otherwise.
+   * @return Whether passthrough playback should be used.
    */
   protected boolean allowPassthrough(String mimeType) {
     return audioTrack.isPassthroughSupported(mimeType);
@@ -232,18 +226,17 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
   @Override
   protected void onOutputFormatChanged(MediaCodec codec, MediaFormat outputFormat) {
     boolean passthrough = passthroughMediaFormat != null;
-    String mimeType = passthrough
-        ? passthroughMediaFormat.getString(android.media.MediaFormat.KEY_MIME)
+    String mimeType = passthrough ? passthroughMediaFormat.getString(MediaFormat.KEY_MIME)
         : MimeTypes.AUDIO_RAW;
-    android.media.MediaFormat format = passthrough ? passthroughMediaFormat : outputFormat;
-    int channelCount = format.getInteger(android.media.MediaFormat.KEY_CHANNEL_COUNT);
-    int sampleRate = format.getInteger(android.media.MediaFormat.KEY_SAMPLE_RATE);
-    audioTrack.configure(mimeType, channelCount, sampleRate, pcmEncoding);
+    MediaFormat format = passthrough ? passthroughMediaFormat : outputFormat;
+    int channelCount = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
+    int sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE);
+    audioTrack.configure(mimeType, channelCount, sampleRate, pcmEncoding, 0);
   }
 
   /**
-   * Invoked when the audio session id becomes known. Once the id is known it will not change
-   * (and hence this method will not be invoked again) unless the renderer is disabled and then
+   * Called when the audio session id becomes known. Once the id is known it will not change (and
+   * hence this method will not be called again) unless the renderer is disabled and then
    * subsequently re-enabled.
    * <p>
    * The default implementation is a no-op. One reason for overriding this method would be to
@@ -264,8 +257,8 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
   }
 
   @Override
-  protected void onReset(long positionUs, boolean joining) throws ExoPlaybackException {
-    super.onReset(positionUs, joining);
+  protected void onPositionReset(long positionUs, boolean joining) throws ExoPlaybackException {
+    super.onPositionReset(positionUs, joining);
     audioTrack.reset();
     currentPositionUs = positionUs;
     allowPositionDiscontinuity = true;
@@ -339,12 +332,12 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
     if (!audioTrack.isInitialized()) {
       // Initialize the AudioTrack now.
       try {
-        if (audioSessionId != AudioTrack.SESSION_ID_NOT_SET) {
-          audioTrack.initialize(audioSessionId);
-        } else {
-          audioSessionId = audioTrack.initialize();
+        if (audioSessionId == AudioTrack.SESSION_ID_NOT_SET) {
+          audioSessionId = audioTrack.initialize(AudioTrack.SESSION_ID_NOT_SET);
           eventDispatcher.audioSessionId(audioSessionId);
           onAudioSessionId(audioSessionId);
+        } else {
+          audioTrack.initialize(audioSessionId);
         }
         audioTrackHasData = false;
       } catch (AudioTrack.InitializationException e) {

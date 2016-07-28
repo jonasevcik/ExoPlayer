@@ -17,6 +17,7 @@ package com.google.android.exoplayer2;
 
 import com.google.android.exoplayer2.source.MediaPeriod;
 import com.google.android.exoplayer2.source.MediaSource;
+import com.google.android.exoplayer2.source.Timeline;
 
 /**
  * An extensible media player exposing traditional high-level media player functionality, such as
@@ -54,7 +55,7 @@ import com.google.android.exoplayer2.source.MediaSource;
  * <h3>Threading model</h3>
  *
  * <p>The figure below shows the {@link ExoPlayer} threading model.</p>
- * <p align="center"><img src="../../../../../images/exoplayer_threading_model.png"
+ * <p align="center"><img src="doc-files/exoplayer-threading-model.png"
  *     alt="MediaPlayer state diagram"
  *     border="0"/></p>
  *
@@ -64,8 +65,8 @@ import com.google.android.exoplayer2.source.MediaSource;
  * discouraged, however if an application does wish to do this then it may do so provided that it
  * ensures accesses are synchronized.
  * </li>
- * <li>Registered {@link EventListener}s are invoked on the thread that created the
- * {@link ExoPlayer} instance.</li>
+ * <li>Registered {@link EventListener}s are called on the thread that created the {@link ExoPlayer}
+ * instance.</li>
  * <li>An internal playback thread is responsible for managing playback and invoking the
  * {@link Renderer}s in order to load and play the media.</li>
  * <li>{@link Renderer} implementations (or any upstream components that they depend on) may
@@ -82,33 +83,33 @@ import com.google.android.exoplayer2.source.MediaSource;
  * calling {@link #getPlaybackState()} is only ever changed as a result of operations completing on
  * the playback thread, as illustrated below.</p>
  *
- * <p align="center"><img src="../../../../../images/exoplayer_state.png"
+ * <p align="center"><img src="doc-files/exoplayer-state.png"
  *     alt="ExoPlayer state"
  *     border="0"/></p>
  *
  * <p>The possible playback state transitions are shown below. Transitions can be triggered either
  * by changes in the state of the {@link Renderer}s being used, or as a result of
- * {@link #setMediaSource(MediaSource)}, {@link #stop()} or {@link #release()} being invoked.</p>
- * <p align="center"><img src="../../../../../images/exoplayer_playbackstate.png"
+ * {@link #setMediaSource(MediaSource)}, {@link #stop()} or {@link #release()} being called.</p>
+ * <p align="center"><img src="doc-files/exoplayer-playbackstate.png"
  *     alt="ExoPlayer playback state transitions"
  *     border="0"/></p>
  */
 public interface ExoPlayer {
 
   /**
-   * Interface definition for a callback to be notified of changes in player state.
+   * Listener of changes in player state.
    */
   interface EventListener {
 
     /**
-     * Invoked when the player starts or stops loading the source.
+     * Called when the player starts or stops loading the source.
      *
      * @param isLoading Whether the source is currently being loaded.
      */
     void onLoadingChanged(boolean isLoading);
 
     /**
-     * Invoked when the value returned from either {@link ExoPlayer#getPlayWhenReady()} or
+     * Called when the value returned from either {@link ExoPlayer#getPlayWhenReady()} or
      * {@link ExoPlayer#getPlaybackState()} changes.
      *
      * @param playWhenReady Whether playback will proceed when ready.
@@ -118,19 +119,19 @@ public interface ExoPlayer {
     void onPlayerStateChanged(boolean playWhenReady, int playbackState);
 
     /**
-     * Invoked when the current value of {@link ExoPlayer#getPlayWhenReady()} has been reflected
-     * by the internal playback thread.
+     * Called when the current value of {@link ExoPlayer#getPlayWhenReady()} has been reflected by
+     * the internal playback thread.
      * <p>
      * An invocation of this method will shortly follow any call to
      * {@link ExoPlayer#setPlayWhenReady(boolean)} that changes the state. If multiple calls are
-     * made in rapid succession, then this method will be invoked only once, after the final state
+     * made in rapid succession, then this method will be called only once, after the final state
      * has been reflected.
      */
     void onPlayWhenReadyCommitted();
 
-    // TODO[playlists]: Should source-initiated resets also cause this to be invoked?
+    // TODO[playlists]: Should source-initiated resets also cause this to be called?
     /**
-     * Invoked when the player's position changes due to a discontinuity (seeking or playback
+     * Called when the player's position changes due to a discontinuity (seeking or playback
      * transitioning to the next period).
      *
      * @param periodIndex The index of the period being played.
@@ -139,10 +140,17 @@ public interface ExoPlayer {
     void onPositionDiscontinuity(int periodIndex, long positionMs);
 
     /**
-     * Invoked when an error occurs. The playback state will transition to
-     * {@link ExoPlayer#STATE_IDLE} immediately after this method is invoked. The player instance
-     * can still be used, and {@link ExoPlayer#release()} must still be called on the player should
-     * it no longer be required.
+     * Called when the timeline changes.
+     *
+     * @param timeline The new timeline.
+     */
+    void onTimelineChanged(Timeline timeline);
+
+    /**
+     * Called when an error occurs. The playback state will transition to
+     * {@link ExoPlayer#STATE_IDLE} immediately after this method is called. The player instance can
+     * still be used, and {@link ExoPlayer#release()} must still be called on the player should it
+     * no longer be required.
      *
      * @param error The error.
      */
@@ -159,7 +167,7 @@ public interface ExoPlayer {
   interface ExoPlayerComponent {
 
     /**
-     * Handles a message delivered to the component. Invoked on the playback thread.
+     * Handles a message delivered to the component. Called on the playback thread.
      *
      * @param messageType An integer identifying the type of message.
      * @param message The message object.
@@ -217,8 +225,8 @@ public interface ExoPlayer {
   long UNKNOWN_TIME = -1;
 
   /**
-   * Register a listener to receive events from the player. The listener's methods will be invoked
-   * on the thread that was used to construct the player.
+   * Register a listener to receive events from the player. The listener's methods will be called on
+   * the thread that was used to construct the player.
    *
    * @param listener The listener to register.
    */
@@ -266,14 +274,14 @@ public interface ExoPlayer {
    * Whether the current value of {@link ExoPlayer#getPlayWhenReady()} has been reflected by the
    * internal playback thread.
    *
-   * @return True if the current value has been reflected. False otherwise.
+   * @return Whether the current value has been reflected.
    */
   boolean isPlayWhenReadyCommitted();
 
   /**
    * Whether the player is currently loading the source.
    *
-   * @return True if the player is currently loading the source. False otherwise.
+   * @return Whether the player is currently loading the source.
    */
   boolean isLoading();
 
@@ -305,9 +313,8 @@ public interface ExoPlayer {
   void stop();
 
   /**
-   * Releases the player. This method must be called when the player is no longer required.
-   * <p>
-   * The player must not be used after calling this method.
+   * Releases the player. This method must be called when the player is no longer required. The
+   * player must not be used after calling this method.
    */
   void release();
 
@@ -329,40 +336,35 @@ public interface ExoPlayer {
   void blockingSendMessages(ExoPlayerMessage... messages);
 
   /**
-   * Gets the duration of the track in milliseconds.
-   *
-   * @return The duration of the track in milliseconds, or {@link ExoPlayer#UNKNOWN_TIME} if the
-   *     duration is not known.
+   * Returns the duration of the current period in milliseconds, or {@link ExoPlayer#UNKNOWN_TIME}
+   * if the duration is not known.
    */
   long getDuration();
 
   /**
-   * Gets the playback position in the current period, in milliseconds.
-   *
-   * @return The playback position in the current period, in milliseconds.
+   * Returns the playback position in the current period, in milliseconds.
    */
   long getCurrentPosition();
 
   /**
-   * Gets the index of the current period.
-   *
-   * @return The index of the current period.
+   * Returns the index of the current period.
    */
   int getCurrentPeriodIndex();
 
   /**
-   * Gets an estimate of the absolute position in milliseconds up to which data is buffered.
-   *
-   * @return An estimate of the absolute position in milliseconds up to which data is buffered,
-   *     or {@link ExoPlayer#UNKNOWN_TIME} if no estimate is available.
+   * Returns the current {@link Timeline}, or {@code null} if there is no timeline.
+   */
+  Timeline getCurrentTimeline();
+
+  /**
+   * Returns an estimate of the absolute position in milliseconds up to which data is buffered,
+   * or {@link ExoPlayer#UNKNOWN_TIME} if no estimate is available.
    */
   long getBufferedPosition();
 
   /**
-   * Gets an estimate of the percentage into the media up to which data is buffered.
-   *
-   * @return An estimate of the percentage into the media up to which data is buffered. 0 if the
-   *     duration of the media is not known or if no estimate is available.
+   * Returns an estimate of the percentage into the media up to which data is buffered, or 0 if no
+   * estimate is available.
    */
   int getBufferedPercentage();
 

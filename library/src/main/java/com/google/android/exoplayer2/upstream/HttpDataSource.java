@@ -25,9 +25,19 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * An HTTP specific extension to {@link DataSource}.
+ * An HTTP {@link DataSource}.
  */
 public interface HttpDataSource extends DataSource {
+
+  /**
+   * A factory for {@link HttpDataSource} instances.
+   */
+  interface Factory extends DataSource.Factory {
+
+    @Override
+    HttpDataSource createDataSource();
+
+  }
 
   /**
    * A {@link Predicate} that rejects content types often used for pay-walls.
@@ -156,9 +166,8 @@ public interface HttpDataSource extends DataSource {
   void clearAllRequestProperties();
 
   /**
-   * Gets the headers provided in the response.
-   *
-   * @return The response headers, or {@code null} if response headers are unavailable.
+   * Returns the headers provided in the response, or {@code null} if response headers are
+   * unavailable.
    */
   Map<String, List<String>> getResponseHeaders();
 

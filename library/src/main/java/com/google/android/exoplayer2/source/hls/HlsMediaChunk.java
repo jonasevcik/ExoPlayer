@@ -54,18 +54,20 @@ import java.util.concurrent.atomic.AtomicInteger;
   private final boolean shouldSpliceIn;
 
   private int bytesLoaded;
+  private HlsSampleStreamWrapper extractorOutput;
+  private long adjustedEndTimeUs;
   private volatile boolean loadCanceled;
   private volatile boolean loadCompleted;
 
   /**
    * @param dataSource The source from which the data should be loaded.
    * @param dataSpec Defines the data to be loaded.
-   * @param format See {@link #format}.
-   * @param formatEvaluatorTrigger See {@link #formatEvaluatorTrigger}.
-   * @param formatEvaluatorData See {@link #formatEvaluatorData}.
+   * @param trackFormat See {@link #trackFormat}.
+   * @param trackSelectionReason See {@link #trackSelectionReason}.
+   * @param trackSelectionData See {@link #trackSelectionData}.
    * @param startTimeUs The start time of the media contained by the chunk, in microseconds.
    * @param endTimeUs The end time of the media contained by the chunk, in microseconds.
-   * @param chunkIndex The index of the chunk.
+   * @param chunkIndex The media sequence number of the chunk.
    * @param discontinuitySequenceNumber The discontinuity sequence number of the chunk.
    * @param extractor The extractor to decode samples from the data.
    * @param extractorNeedsInit Whether the extractor needs initializing with the target
@@ -75,18 +77,19 @@ import java.util.concurrent.atomic.AtomicInteger;
    * @param encryptionKey For AES encryption chunks, the encryption key.
    * @param encryptionIv For AES encryption chunks, the encryption initialization vector.
    */
-  public HlsMediaChunk(DataSource dataSource, DataSpec dataSpec, Format format,
-      int formatEvaluatorTrigger, Object formatEvaluatorData, long startTimeUs, long endTimeUs,
+  public HlsMediaChunk(DataSource dataSource, DataSpec dataSpec, Format trackFormat,
+      int trackSelectionReason, Object trackSelectionData, long startTimeUs, long endTimeUs,
       int chunkIndex, int discontinuitySequenceNumber, Extractor extractor,
       boolean extractorNeedsInit, boolean shouldSpliceIn, byte[] encryptionKey,
       byte[] encryptionIv) {
-    super(buildDataSource(dataSource, encryptionKey, encryptionIv), dataSpec, format,
-        formatEvaluatorTrigger, formatEvaluatorData, startTimeUs, endTimeUs, chunkIndex);
+    super(buildDataSource(dataSource, encryptionKey, encryptionIv), dataSpec, trackFormat,
+        trackSelectionReason, trackSelectionData, startTimeUs, endTimeUs, chunkIndex);
     this.discontinuitySequenceNumber = discontinuitySequenceNumber;
     this.extractor = extractor;
     this.extractorNeedsInit = extractorNeedsInit;
     this.shouldSpliceIn = shouldSpliceIn;
     // Note: this.dataSource and dataSource may be different.
+    adjustedEndTimeUs = startTimeUs;
     this.isEncrypted = this.dataSource instanceof Aes128DataSource;
     uid = UID_SOURCE.getAndIncrement();
   }
@@ -98,10 +101,25 @@ import java.util.concurrent.atomic.AtomicInteger;
    * @param output The output that will receive the loaded samples.
    */
   public void init(HlsSampleStreamWrapper output) {
+    extractorOutput = output;
     output.init(uid, shouldSpliceIn);
     if (extractorNeedsInit) {
       extractor.init(output);
     }
+  }
+
+  /**
+   * Returns the presentation time in microseconds of the first sample in the chunk.
+   */
+  public long getAdjustedStartTimeUs() {
+    return adjustedEndTimeUs - getDurationUs();
+  }
+
+  /**
+   * Returns the presentation time in microseconds of the last sample in the chunk
+   */
+  public long getAdjustedEndTimeUs() {
+    return adjustedEndTimeUs;
   }
 
   @Override
@@ -151,6 +169,10 @@ import java.util.concurrent.atomic.AtomicInteger;
         int result = Extractor.RESULT_CONTINUE;
         while (result == Extractor.RESULT_CONTINUE && !loadCanceled) {
           result = extractor.read(input, null);
+        }
+        long adjustedEndTimeUs = extractorOutput.getLargestQueuedTimestampUs();
+        if (adjustedEndTimeUs != Long.MIN_VALUE) {
+          this.adjustedEndTimeUs = adjustedEndTimeUs;
         }
       } finally {
         bytesLoaded = (int) (input.getPosition() - dataSpec.absoluteStreamPosition);

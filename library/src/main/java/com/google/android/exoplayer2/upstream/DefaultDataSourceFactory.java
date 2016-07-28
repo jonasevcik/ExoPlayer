@@ -15,36 +15,55 @@
  */
 package com.google.android.exoplayer2.upstream;
 
+import com.google.android.exoplayer2.upstream.DataSource.Factory;
+
 import android.content.Context;
 
 /**
- * A {@link DataSourceFactory} that produces {@link DefaultDataSource} instances that delegate to
+ * A {@link Factory} that produces {@link DefaultDataSource} instances that delegate to
  * {@link DefaultHttpDataSource}s for non-file/asset/content URIs.
  */
-public final class DefaultDataSourceFactory implements DataSourceFactory {
+public final class DefaultDataSourceFactory implements Factory {
 
   private final Context context;
   private final String userAgent;
+  private final TransferListener listener;
   private final boolean allowCrossProtocolRedirects;
 
+  /**
+   * @param context A context.
+   * @param userAgent The User-Agent string that should be used.
+   */
   public DefaultDataSourceFactory(Context context, String userAgent) {
-    this(context, userAgent, false);
+    this(context, userAgent, null);
   }
 
-  public DefaultDataSourceFactory(Context context, String userAgent,
+  /**
+   * @param context A context.
+   * @param userAgent The User-Agent string that should be used.
+   * @param listener An optional listener.
+   */
+  public DefaultDataSourceFactory(Context context, String userAgent, TransferListener listener) {
+    this(context, userAgent, listener, false);
+  }
+
+  /**
+   * @param context A context.
+   * @param userAgent The User-Agent string that should be used.
+   * @param listener An optional listener.
+   * @param allowCrossProtocolRedirects Whether cross-protocol redirects (i.e. redirects from HTTP
+   *     to HTTPS and vice versa) are enabled.
+   */
+  public DefaultDataSourceFactory(Context context, String userAgent, TransferListener listener,
       boolean allowCrossProtocolRedirects) {
     this.context = context.getApplicationContext();
     this.userAgent = userAgent;
+    this.listener = listener;
     this.allowCrossProtocolRedirects = allowCrossProtocolRedirects;
   }
 
   @Override
   public DefaultDataSource createDataSource() {
-    return createDataSource(null);
-  }
-
-  @Override
-  public DefaultDataSource createDataSource(TransferListener listener) {
     return new DefaultDataSource(context, listener, userAgent, allowCrossProtocolRedirects);
   }
 

@@ -32,7 +32,7 @@ public interface SampleStream {
    * Note: If the stream has ended then a buffer with the end of stream flag can always be read from
    * {@link #readData(FormatHolder, DecoderInputBuffer)}. Hence an ended stream is always ready.
    *
-   * @return True if data is available to be read. False otherwise.
+   * @return Whether data is available to be read.
    */
   boolean isReady();
 
@@ -54,5 +54,12 @@ public interface SampleStream {
    *     {@link C#RESULT_BUFFER_READ}.
    */
   int readData(FormatHolder formatHolder, DecoderInputBuffer buffer);
+
+  /**
+   * Attempts to skip to the keyframe before the specified time.
+   *
+   * @param timeUs The specified time.
+   */
+  void skipToKeyframeBefore(long timeUs);
 
 }

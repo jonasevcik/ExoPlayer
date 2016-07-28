@@ -23,7 +23,6 @@ import com.google.android.exoplayer2.FormatHolder;
 import com.google.android.exoplayer2.util.Assertions;
 import com.google.android.exoplayer2.util.MimeTypes;
 
-import android.annotation.TargetApi;
 import android.os.Handler;
 import android.os.Handler.Callback;
 import android.os.Looper;
@@ -33,13 +32,12 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * A renderer for subtitles.
+ * A renderer for text.
  * <p>
- * Text is parsed from sample data using {@link SubtitleDecoder} instances obtained from a
- * {@link SubtitleDecoderFactory}. The actual rendering of each line of text is delegated to a
- * {@link Output}.
+ * {@link Subtitle}s are decoded from sample data using {@link SubtitleDecoder} instances obtained
+ * from a {@link SubtitleDecoderFactory}. The actual rendering of the subtitle {@link Cue}s is
+ * delegated to an {@link Output}.
  */
-@TargetApi(16)
 public final class TextRenderer extends BaseRenderer implements Callback {
 
   /**
@@ -48,7 +46,7 @@ public final class TextRenderer extends BaseRenderer implements Callback {
   public interface Output {
 
     /**
-     * Invoked each time there is a change in the {@link Cue}s.
+     * Called each time there is a change in the {@link Cue}s.
      *
      * @param cues The {@link Cue}s.
      */
@@ -74,10 +72,10 @@ public final class TextRenderer extends BaseRenderer implements Callback {
   /**
    * @param output The output.
    * @param outputLooper The looper associated with the thread on which the output should be
-   *     invoked. If the output makes use of standard Android UI components, then this should
+   *     called. If the output makes use of standard Android UI components, then this should
    *     normally be the looper associated with the application's main thread, which can be obtained
    *     using {@link android.app.Activity#getMainLooper()}. Null may be passed if the output
-   *     should be invoked directly on the player's internal rendering thread.
+   *     should be called directly on the player's internal rendering thread.
    */
   public TextRenderer(Output output, Looper outputLooper) {
     this(output, outputLooper, SubtitleDecoderFactory.DEFAULT);
@@ -86,22 +84,18 @@ public final class TextRenderer extends BaseRenderer implements Callback {
   /**
    * @param output The output.
    * @param outputLooper The looper associated with the thread on which the output should be
-   *     invoked. If the output makes use of standard Android UI components, then this should
+   *     called. If the output makes use of standard Android UI components, then this should
    *     normally be the looper associated with the application's main thread, which can be obtained
    *     using {@link android.app.Activity#getMainLooper()}. Null may be passed if the output
-   *     should be invoked directly on the player's internal rendering thread.
+   *     should be called directly on the player's internal rendering thread.
    * @param decoderFactory A factory from which to obtain {@link SubtitleDecoder} instances.
    */
   public TextRenderer(Output output, Looper outputLooper, SubtitleDecoderFactory decoderFactory) {
+    super(C.TRACK_TYPE_TEXT);
     this.output = Assertions.checkNotNull(output);
     this.outputHandler = outputLooper == null ? null : new Handler(outputLooper, this);
     this.decoderFactory = decoderFactory;
     formatHolder = new FormatHolder();
-  }
-
-  @Override
-  public int getTrackType() {
-    return C.TRACK_TYPE_TEXT;
   }
 
   @Override
@@ -120,7 +114,7 @@ public final class TextRenderer extends BaseRenderer implements Callback {
   }
 
   @Override
-  protected void onReset(long positionUs, boolean joining) {
+  protected void onPositionReset(long positionUs, boolean joining) {
     inputStreamEnded = false;
     outputStreamEnded = false;
     if (subtitle != null) {
@@ -146,7 +140,7 @@ public final class TextRenderer extends BaseRenderer implements Callback {
       decoder.setPositionUs(positionUs);
       try {
         nextSubtitle = decoder.dequeueOutputBuffer();
-      } catch (TextDecoderException e) {
+      } catch (SubtitleDecoderException e) {
         throw ExoPlaybackException.createForRenderer(e, getIndex());
       }
     }
@@ -167,7 +161,7 @@ public final class TextRenderer extends BaseRenderer implements Callback {
       }
     }
 
-    if (nextSubtitle != null && nextSubtitle.timestampUs <= positionUs) {
+    if (nextSubtitle != null && nextSubtitle.timeUs <= positionUs) {
       // Advance to the next subtitle. Sync the next event index and trigger an update.
       if (subtitle != null) {
         subtitle.release();
@@ -214,7 +208,7 @@ public final class TextRenderer extends BaseRenderer implements Callback {
           break;
         }
       }
-    } catch (TextDecoderException e) {
+    } catch (SubtitleDecoderException e) {
       throw ExoPlaybackException.createForRenderer(e, getIndex());
     }
   }

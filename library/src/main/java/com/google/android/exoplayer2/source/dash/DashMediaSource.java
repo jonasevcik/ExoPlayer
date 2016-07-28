@@ -21,12 +21,11 @@ import com.google.android.exoplayer2.source.AdaptiveMediaSourceEventListener;
 import com.google.android.exoplayer2.source.AdaptiveMediaSourceEventListener.EventDispatcher;
 import com.google.android.exoplayer2.source.MediaPeriod;
 import com.google.android.exoplayer2.source.MediaSource;
-import com.google.android.exoplayer2.source.dash.mpd.MediaPresentationDescription;
-import com.google.android.exoplayer2.source.dash.mpd.MediaPresentationDescriptionParser;
-import com.google.android.exoplayer2.source.dash.mpd.UtcTimingElement;
-import com.google.android.exoplayer2.upstream.BandwidthMeter;
+import com.google.android.exoplayer2.source.Timeline;
+import com.google.android.exoplayer2.source.dash.manifest.DashManifest;
+import com.google.android.exoplayer2.source.dash.manifest.DashManifestParser;
+import com.google.android.exoplayer2.source.dash.manifest.UtcTimingElement;
 import com.google.android.exoplayer2.upstream.DataSource;
-import com.google.android.exoplayer2.upstream.DataSourceFactory;
 import com.google.android.exoplayer2.upstream.Loader;
 import com.google.android.exoplayer2.upstream.ParsingLoadable;
 import com.google.android.exoplayer2.util.Util;
@@ -42,6 +41,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Locale;
 import java.util.TimeZone;
 
@@ -57,67 +57,80 @@ public final class DashMediaSource implements MediaSource {
 
   private static final String TAG = "DashMediaSource";
 
-  private final DataSourceFactory dataSourceFactory;
-  private final BandwidthMeter bandwidthMeter;
+  private final DataSource.Factory manifestDataSourceFactory;
+  private final DashChunkSource.Factory chunkSourceFactory;
   private final int minLoadableRetryCount;
   private final EventDispatcher eventDispatcher;
-  private final MediaPresentationDescriptionParser manifestParser;
+  private final DashManifestParser manifestParser;
   private final ManifestCallback manifestCallback;
 
+  private MediaSource.InvalidationListener invalidationListener;
   private DataSource dataSource;
   private Loader loader;
 
   private Uri manifestUri;
   private long manifestLoadStartTimestamp;
   private long manifestLoadEndTimestamp;
-  private MediaPresentationDescription manifest;
+  private DashManifest manifest;
   private Handler manifestRefreshHandler;
-  private DashMediaPeriod[] periods;
+  private ArrayList<DashMediaPeriod> periods;
   private long elapsedRealtimeOffset;
 
-  public DashMediaSource(Uri manifestUri, DataSourceFactory dataSourceFactory,
-      BandwidthMeter bandwidthMeter, Handler eventHandler,
+  public DashMediaSource(Uri manifestUri, DataSource.Factory manifestDataSourceFactory,
+      DashChunkSource.Factory chunkSourceFactory, Handler eventHandler,
       AdaptiveMediaSourceEventListener eventListener) {
-    this(manifestUri, dataSourceFactory, bandwidthMeter, DEFAULT_MIN_LOADABLE_RETRY_COUNT,
-        eventHandler, eventListener);
+    this(manifestUri, manifestDataSourceFactory, chunkSourceFactory,
+        DEFAULT_MIN_LOADABLE_RETRY_COUNT, eventHandler, eventListener);
   }
 
-  public DashMediaSource(Uri manifestUri, DataSourceFactory dataSourceFactory,
-      BandwidthMeter bandwidthMeter, int minLoadableRetryCount, Handler eventHandler,
-      AdaptiveMediaSourceEventListener eventListener) {
+  public DashMediaSource(Uri manifestUri, DataSource.Factory manifestDataSourceFactory,
+      DashChunkSource.Factory chunkSourceFactory, int minLoadableRetryCount,
+      Handler eventHandler, AdaptiveMediaSourceEventListener eventListener) {
     this.manifestUri = manifestUri;
-    this.dataSourceFactory = dataSourceFactory;
-    this.bandwidthMeter = bandwidthMeter;
+    this.manifestDataSourceFactory = manifestDataSourceFactory;
+    this.chunkSourceFactory = chunkSourceFactory;
     this.minLoadableRetryCount = minLoadableRetryCount;
     eventDispatcher = new EventDispatcher(eventHandler, eventListener);
-    manifestParser = new MediaPresentationDescriptionParser();
+    manifestParser = new DashManifestParser();
     manifestCallback = new ManifestCallback();
   }
 
   // MediaSource implementation.
 
   @Override
-  public void prepareSource() {
-    dataSource = dataSourceFactory.createDataSource();
+  public void prepareSource(InvalidationListener listener) {
+    invalidationListener = listener;
+    dataSource = manifestDataSourceFactory.createDataSource();
     loader = new Loader("Loader:DashMediaSource");
     manifestRefreshHandler = new Handler();
     startLoadingManifest();
   }
 
   @Override
-  public int getPeriodCount() {
-    if (manifest == null) {
-      return UNKNOWN_PERIOD_COUNT;
+  public int getNewPlayingPeriodIndex(int oldPlayingPeriodIndex, Timeline oldTimeline) {
+    int periodIndex = oldPlayingPeriodIndex;
+    int oldPeriodCount = oldTimeline.getPeriodCount();
+    while (oldPeriodCount == Timeline.UNKNOWN_PERIOD_COUNT || periodIndex < oldPeriodCount) {
+      Object id = oldTimeline.getPeriodId(periodIndex);
+      if (id == null) {
+        break;
+      }
+      int index = periods.indexOf(id);
+      if (index != -1) {
+        return index;
+      }
+      periodIndex++;
     }
-    return manifest.getPeriodCount();
+    return Timeline.NO_PERIOD_INDEX;
   }
 
   @Override
-  public MediaPeriod createPeriod(int index) {
-    if (periods == null) {
+  public MediaPeriod createPeriod(int index) throws IOException {
+    if (periods == null || periods.size() <= index) {
+      loader.maybeThrowError();
       return null;
     }
-    return periods[index];
+    return periods.get(index);
   }
 
   @Override
@@ -139,11 +152,33 @@ public final class DashMediaSource implements MediaSource {
 
   // Loadable callbacks.
 
-  /* package */ void onManifestLoadCompleted(ParsingLoadable<MediaPresentationDescription> loadable,
+  /* package */ void onManifestLoadCompleted(ParsingLoadable<DashManifest> loadable,
       long elapsedRealtimeMs, long loadDurationMs) {
     eventDispatcher.loadCompleted(loadable.dataSpec, loadable.type, elapsedRealtimeMs,
         loadDurationMs, loadable.bytesLoaded());
-    manifest = loadable.getResult();
+    DashManifest newManifest = loadable.getResult();
+
+    int periodsToRemoveCount = 0;
+    if (periods != null) {
+      int periodCount = periods.size();
+      long newFirstPeriodStartTimeUs = newManifest.getPeriod(0).startMs * 1000;
+      while (periodsToRemoveCount < periodCount
+          && periods.get(periodsToRemoveCount).getStartUs() < newFirstPeriodStartTimeUs) {
+        periodsToRemoveCount++;
+      }
+
+      // After discarding old periods, we should never have more periods than listed in the new
+      // manifest. That would mean that a previously announced period is no longer advertised. If
+      // this condition occurs, assume that we are hitting a manifest server that is out of sync and
+      // behind, discard this manifest, and try again later.
+      if (periodCount - periodsToRemoveCount > newManifest.getPeriodCount()) {
+        Log.w(TAG, "Out of sync manifest");
+        scheduleManifestRefresh();
+        return;
+      }
+    }
+
+    manifest = newManifest;
     manifestLoadStartTimestamp = elapsedRealtimeMs - loadDurationMs;
     manifestLoadEndTimestamp = elapsedRealtimeMs;
     if (manifest.location != null) {
@@ -154,16 +189,32 @@ public final class DashMediaSource implements MediaSource {
       if (manifest.utcTiming != null) {
         resolveUtcTimingElement(manifest.utcTiming);
       } else {
-        finishPrepare();
+        finishManifestProcessing();
       }
     } else {
-      for (int i = 0; i < periods.length; i++) {
-        periods[i].updateManifest(manifest, i);
+      // Remove old periods.
+      while (periodsToRemoveCount-- > 0) {
+        periods.remove(0);
       }
+
+      // Update existing periods. Only the first and the last periods can change.
+      int periodCount = periods.size();
+      if (periodCount > 0) {
+        updatePeriod(0);
+        if (periodCount > 1) {
+          updatePeriod(periodCount - 1);
+        }
+      }
+
+      finishManifestProcessing();
     }
   }
 
-  /* package */ int onManifestLoadError(ParsingLoadable<MediaPresentationDescription> loadable,
+  private void updatePeriod(int index) {
+    periods.get(index).updateManifest(manifest, index);
+  }
+
+  /* package */ int onManifestLoadError(ParsingLoadable<DashManifest> loadable,
       long elapsedRealtimeMs, long loadDurationMs, IOException error) {
     boolean isFatal = error instanceof ParserException;
     eventDispatcher.loadError(loadable.dataSpec, loadable.type, elapsedRealtimeMs, loadDurationMs,
@@ -231,22 +282,26 @@ public final class DashMediaSource implements MediaSource {
 
   private void onUtcTimestampResolved(long elapsedRealtimeOffsetMs) {
     this.elapsedRealtimeOffset = elapsedRealtimeOffsetMs;
-    finishPrepare();
+    finishManifestProcessing();
   }
 
   private void onUtcTimestampResolutionError(IOException error) {
     Log.e(TAG, "Failed to resolve UtcTiming element.", error);
     // Be optimistic and continue in the hope that the device clock is correct.
-    finishPrepare();
+    finishManifestProcessing();
   }
 
-  private void finishPrepare() {
-    int periodCount = manifest.getPeriodCount();
-    periods = new DashMediaPeriod[periodCount];
-    for (int i = 0; i < periodCount; i++) {
-      periods[i] = new DashMediaPeriod(manifest, i, dataSourceFactory, bandwidthMeter,
-          minLoadableRetryCount, eventDispatcher, elapsedRealtimeOffset, loader);
+  private void finishManifestProcessing() {
+    if (periods == null) {
+      periods = new ArrayList<>();
     }
+    int periodCount = manifest.getPeriodCount();
+    for (int i = periods.size(); i < periodCount; i++) {
+      periods.add(new DashMediaPeriod(manifest, i, chunkSourceFactory, minLoadableRetryCount,
+          eventDispatcher, elapsedRealtimeOffset, loader));
+    }
+    invalidationListener.onTimelineChanged(new DashTimeline(manifest,
+        periods.toArray(new DashMediaPeriod[periods.size()])));
     scheduleManifestRefresh();
   }
 
@@ -278,23 +333,70 @@ public final class DashMediaSource implements MediaSource {
     eventDispatcher.loadStarted(loadable.dataSpec, loadable.type, elapsedRealtimeMs);
   }
 
-  private final class ManifestCallback implements
-      Loader.Callback<ParsingLoadable<MediaPresentationDescription>> {
+  private static final class DashTimeline implements Timeline {
+
+    private final DashManifest manifest;
+    private final DashMediaPeriod[] periods;
+
+    public DashTimeline(DashManifest manifest, DashMediaPeriod[] periods) {
+      this.manifest = manifest;
+      this.periods = periods;
+    }
 
     @Override
-    public void onLoadCompleted(ParsingLoadable<MediaPresentationDescription> loadable,
+    public int getPeriodCount() {
+      return manifest.getPeriodCount();
+    }
+
+    @Override
+    public boolean isFinal() {
+      return !manifest.dynamic;
+    }
+
+    @Override
+    public long getPeriodDuration(int index) {
+      return manifest.getPeriodDuration(index);
+    }
+
+    @Override
+    public Object getPeriodId(int index) {
+      return index >= periods.length ? null : periods[index];
+    }
+
+    @Override
+    public int getIndexOfPeriod(Object id) {
+      for (int i = 0; i < periods.length; i++) {
+        if (id == periods[i]) {
+          return i;
+        }
+      }
+      return Timeline.NO_PERIOD_INDEX;
+    }
+
+    @Override
+    public Object getManifest() {
+      return manifest;
+    }
+
+  }
+
+  private final class ManifestCallback implements
+      Loader.Callback<ParsingLoadable<DashManifest>> {
+
+    @Override
+    public void onLoadCompleted(ParsingLoadable<DashManifest> loadable,
         long elapsedRealtimeMs, long loadDurationMs) {
       onManifestLoadCompleted(loadable, elapsedRealtimeMs, loadDurationMs);
     }
 
     @Override
-    public void onLoadCanceled(ParsingLoadable<MediaPresentationDescription> loadable,
+    public void onLoadCanceled(ParsingLoadable<DashManifest> loadable,
         long elapsedRealtimeMs, long loadDurationMs, boolean released) {
       DashMediaSource.this.onLoadCanceled(loadable, elapsedRealtimeMs, loadDurationMs);
     }
 
     @Override
-    public int onLoadError(ParsingLoadable<MediaPresentationDescription> loadable,
+    public int onLoadError(ParsingLoadable<DashManifest> loadable,
         long elapsedRealtimeMs, long loadDurationMs, IOException error) {
       return onManifestLoadError(loadable, elapsedRealtimeMs, loadDurationMs, error);
     }

@@ -41,13 +41,28 @@ public final class TrackGroupArray {
   }
 
   /**
-   * Gets the group at a given index.
+   * Returns the group at a given index.
    *
    * @param index The index of the group.
    * @return The group.
    */
   public TrackGroup get(int index) {
     return trackGroups[index];
+  }
+
+  /**
+   * Returns the index of a group within the array.
+   *
+   * @param group The group.
+   * @return The index of the group, or -1 if no such group exists.
+   */
+  public int indexOf(TrackGroup group) {
+    for (int i = 0; i < length; i++) {
+      if (trackGroups[i] == group) {
+        return i;
+      }
+    }
+    return -1;
   }
 
   @Override

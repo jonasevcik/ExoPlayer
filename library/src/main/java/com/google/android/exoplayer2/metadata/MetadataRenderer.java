@@ -15,12 +15,11 @@
  */
 package com.google.android.exoplayer2.metadata;
 
+import com.google.android.exoplayer2.BaseRenderer;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ExoPlaybackException;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.FormatHolder;
-import com.google.android.exoplayer2.Renderer;
-import com.google.android.exoplayer2.BaseRenderer;
 import com.google.android.exoplayer2.decoder.DecoderInputBuffer;
 import com.google.android.exoplayer2.util.Assertions;
 
@@ -32,7 +31,7 @@ import android.os.Message;
 import java.nio.ByteBuffer;
 
 /**
- * A {@link Renderer} for metadata embedded in a media stream.
+ * A renderer for metadata.
  *
  * @param <T> The type of the metadata.
  */
@@ -46,7 +45,7 @@ public final class MetadataRenderer<T> extends BaseRenderer implements Callback 
   public interface Output<T> {
 
     /**
-     * Invoked each time there is a metadata associated with current playback time.
+     * Called each time there is a metadata associated with current playback time.
      *
      * @param metadata The metadata to process.
      */
@@ -68,25 +67,21 @@ public final class MetadataRenderer<T> extends BaseRenderer implements Callback 
 
   /**
    * @param output The output.
-   * @param outputLooper The looper associated with the thread on which the output should be
-   *     invoked. If the output makes use of standard Android UI components, then this should
-   *     normally be the looper associated with the application's main thread, which can be obtained
-   *     using {@link android.app.Activity#getMainLooper()}. Null may be passed if the output
-   *     should be invoked directly on the player's internal rendering thread.
+   * @param outputLooper The looper associated with the thread on which the output should be called.
+   *     If the output makes use of standard Android UI components, then this should normally be the
+   *     looper associated with the application's main thread, which can be obtained using
+   *     {@link android.app.Activity#getMainLooper()}. Null may be passed if the output should be
+   *     called directly on the player's internal rendering thread.
    * @param metadataDecoder A decoder for the metadata.
    */
   public MetadataRenderer(Output<T> output, Looper outputLooper,
       MetadataDecoder<T> metadataDecoder) {
+    super(C.TRACK_TYPE_METADATA);
     this.output = Assertions.checkNotNull(output);
     this.outputHandler = outputLooper == null ? null : new Handler(outputLooper, this);
     this.metadataDecoder = Assertions.checkNotNull(metadataDecoder);
     formatHolder = new FormatHolder();
     buffer = new DecoderInputBuffer(DecoderInputBuffer.BUFFER_REPLACEMENT_MODE_NORMAL);
-  }
-
-  @Override
-  public int getTrackType() {
-    return C.TRACK_TYPE_METADATA;
   }
 
   @Override
@@ -96,7 +91,7 @@ public final class MetadataRenderer<T> extends BaseRenderer implements Callback 
   }
 
   @Override
-  protected void onReset(long positionUs, boolean joining) {
+  protected void onPositionReset(long positionUs, boolean joining) {
     pendingMetadata = null;
     inputStreamEnded = false;
   }

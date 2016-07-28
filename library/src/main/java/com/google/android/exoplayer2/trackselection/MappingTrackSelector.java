@@ -16,7 +16,6 @@
 package com.google.android.exoplayer2.trackselection;
 
 import com.google.android.exoplayer2.ExoPlaybackException;
-import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.RendererCapabilities;
 import com.google.android.exoplayer2.source.TrackGroup;
 import com.google.android.exoplayer2.source.TrackGroupArray;
@@ -40,12 +39,12 @@ import java.util.concurrent.CopyOnWriteArraySet;
 public abstract class MappingTrackSelector extends TrackSelector {
 
   /**
-   * Interface definition for a callback to be notified of {@link MappingTrackSelector} events.
+   * Listener of {@link MappingTrackSelector} events.
    */
   public interface EventListener {
 
     /**
-     * Invoked when the track information has changed.
+     * Called when the track information has changed.
      *
      * @param trackInfo Contains the new track and track selection information.
      */
@@ -72,7 +71,7 @@ public abstract class MappingTrackSelector extends TrackSelector {
   }
 
   /**
-   * Register a listener to receive events from the selector. The listener's methods will be invoked
+   * Register a listener to receive events from the selector. The listener's methods will be called
    * using the {@link Handler} that was passed to the constructor.
    *
    * @param listener The listener to register.
@@ -92,9 +91,7 @@ public abstract class MappingTrackSelector extends TrackSelector {
   }
 
   /**
-   * Gets information about the current tracks and track selection for each renderer.
-   *
-   * @return Contains the current tracks and track selection information.
+   * Returns information about the current tracks and track selection for each renderer.
    */
   public final TrackInfo getTrackInfo() {
     return activeTrackInfo;
@@ -104,7 +101,7 @@ public abstract class MappingTrackSelector extends TrackSelector {
    * Sets whether the renderer at the specified index is disabled.
    *
    * @param rendererIndex The renderer index.
-   * @param disabled True if the renderer is disabled. False otherwise.
+   * @param disabled Whether the renderer is disabled.
    */
   public final void setRendererDisabled(int rendererIndex, boolean disabled) {
     if (rendererDisabledFlags.get(rendererIndex) == disabled) {
@@ -119,7 +116,7 @@ public abstract class MappingTrackSelector extends TrackSelector {
    * Returns whether the renderer is disabled.
    *
    * @param rendererIndex The renderer index.
-   * @return True if the renderer is disabled. False otherwise.
+   * @return Whether the renderer is disabled.
    */
   public final boolean getRendererDisabled(int rendererIndex) {
     return rendererDisabledFlags.get(rendererIndex);
@@ -163,7 +160,7 @@ public abstract class MappingTrackSelector extends TrackSelector {
    *
    * @param rendererIndex The renderer index.
    * @param groups The {@link TrackGroupArray}.
-   * @return True if there is an override. False otherwise.
+   * @return Whether there is an override.
    */
   public final boolean hasSelectionOverride(int rendererIndex, TrackGroupArray groups) {
     Map<TrackGroupArray, TrackSelection> overrides = trackSelectionOverrides.get(rendererIndex);
@@ -260,11 +257,13 @@ public abstract class MappingTrackSelector extends TrackSelector {
 
     // Create a track group array for each renderer, and trim each rendererFormatSupports entry.
     TrackGroupArray[] rendererTrackGroupArrays = new TrackGroupArray[rendererCapabilities.length];
+    int[] rendererTrackTypes = new int[rendererCapabilities.length];
     for (int i = 0; i < rendererCapabilities.length; i++) {
       int rendererTrackGroupCount = rendererTrackGroupCounts[i];
       rendererTrackGroupArrays[i] = new TrackGroupArray(
           Arrays.copyOf(rendererTrackGroups[i], rendererTrackGroupCount));
       rendererFormatSupports[i] = Arrays.copyOf(rendererFormatSupports[i], rendererTrackGroupCount);
+      rendererTrackTypes[i] = rendererCapabilities[i].getTrackType();
     }
 
     // Create a track group array for track groups not associated with a renderer.
@@ -272,40 +271,28 @@ public abstract class MappingTrackSelector extends TrackSelector {
     TrackGroupArray unassociatedTrackGroupArray = new TrackGroupArray(Arrays.copyOf(
         rendererTrackGroups[rendererCapabilities.length], unassociatedTrackGroupCount));
 
-    TrackSelection[] rendererTrackSelections = selectTracks(rendererCapabilities,
-        rendererTrackGroupArrays, rendererFormatSupports);
+    TrackSelection[] trackSelections = selectTracks(rendererCapabilities, rendererTrackGroupArrays,
+        rendererFormatSupports);
 
     // Apply track disabling and overriding.
     for (int i = 0; i < rendererCapabilities.length; i++) {
       if (rendererDisabledFlags.get(i)) {
-        rendererTrackSelections[i] = null;
+        trackSelections[i] = null;
       } else {
         Map<TrackGroupArray, TrackSelection> override = trackSelectionOverrides.get(i);
         TrackSelection overrideSelection = override == null ? null
             : override.get(rendererTrackGroupArrays[i]);
         if (overrideSelection != null) {
-          rendererTrackSelections[i] = overrideSelection;
+          trackSelections[i] = overrideSelection;
         }
-      }
-    }
-
-    // The track selections above index into the track group arrays associated to each renderer,
-    // and not to the original track groups passed to this method. Build the corresponding track
-    // selections into the original track groups to pass back as the final selection.
-    TrackSelection[] trackSelections = new TrackSelection[rendererCapabilities.length];
-    for (int i = 0; i < rendererCapabilities.length; i++) {
-      TrackSelection selection = rendererTrackSelections[i];
-      if (selection != null) {
-        TrackGroup group = rendererTrackGroupArrays[i].get(selection.group);
-        int originalGroupIndex = findGroupInGroupArray(trackGroups, group);
-        trackSelections[i] = new TrackSelection(originalGroupIndex, selection.getTracks());
       }
     }
 
     // Package up the track information and selections.
     TrackSelectionArray trackSelectionArray = new TrackSelectionArray(trackSelections);
-    TrackInfo trackInfo = new TrackInfo(rendererTrackGroupArrays, rendererTrackSelections,
-        mixedMimeTypeAdaptationSupport, rendererFormatSupports, unassociatedTrackGroupArray);
+    TrackInfo trackInfo = new TrackInfo(rendererTrackTypes, rendererTrackGroupArrays,
+        trackSelections, mixedMimeTypeAdaptationSupport, rendererFormatSupports,
+        unassociatedTrackGroupArray);
     return Pair.<TrackSelectionArray, Object>create(trackSelectionArray, trackInfo);
   }
 
@@ -367,13 +354,13 @@ public abstract class MappingTrackSelector extends TrackSelector {
   }
 
   /**
-   * Calls {@link RendererCapabilities#supportsFormat(Format)} for each track in the specified
+   * Calls {@link RendererCapabilities#supportsFormat} for each track in the specified
    * {@link TrackGroup}, returning the results in an array.
    *
    * @param rendererCapabilities The {@link RendererCapabilities} of the renderer.
    * @param group The {@link TrackGroup} to evaluate.
    * @return An array containing the result of calling
-   *     {@link RendererCapabilities#supportsFormat(Format)} for each track in the group.
+   *     {@link RendererCapabilities#supportsFormat} for each track in the group.
    * @throws ExoPlaybackException If an error occurs determining the format support.
    */
   private static int[] getFormatSupport(RendererCapabilities rendererCapabilities, TrackGroup group)
@@ -401,23 +388,6 @@ public abstract class MappingTrackSelector extends TrackSelector {
       mixedMimeTypeAdaptationSupport[i] = rendererCapabilities[i].supportsMixedMimeTypeAdaptation();
     }
     return mixedMimeTypeAdaptationSupport;
-  }
-
-  /**
-   * Finds the specified group in a group array, using referential equality.
-   *
-   * @param groupArray The group array to search.
-   * @param group The group to search for.
-   * @return The index of the group in the group array.
-   * @throws IllegalStateException If the group was not found.
-   */
-  private static int findGroupInGroupArray(TrackGroupArray groupArray, TrackGroup group) {
-    for (int i = 0; i < groupArray.length; i++) {
-      if (groupArray.get(i) == group) {
-        return i;
-      }
-    }
-    throw new IllegalStateException();
   }
 
   private void notifyTrackInfoChanged(final TrackInfo trackInfo) {
@@ -456,6 +426,7 @@ public abstract class MappingTrackSelector extends TrackSelector {
      */
     public final int rendererCount;
 
+    private final int[] rendererTrackTypes;
     private final TrackGroupArray[] trackGroups;
     private final TrackSelection[] trackSelections;
     private final int[] mixedMimeTypeAdaptiveSupport;
@@ -463,17 +434,19 @@ public abstract class MappingTrackSelector extends TrackSelector {
     private final TrackGroupArray unassociatedTrackGroups;
 
     /**
+     * @param rendererTrackTypes The track type supported by each renderer.
      * @param trackGroups The {@link TrackGroupArray}s for each renderer.
      * @param trackSelections The current {@link TrackSelection}s for each renderer.
      * @param mixedMimeTypeAdaptiveSupport The result of
      *     {@link RendererCapabilities#supportsMixedMimeTypeAdaptation()} for each renderer.
-     * @param formatSupport The result of {@link RendererCapabilities#supportsFormat(Format)} for
-     *     each track, indexed by renderer index, group index and track index (in that order).
+     * @param formatSupport The result of {@link RendererCapabilities#supportsFormat} for each
+     *     track, indexed by renderer index, group index and track index (in that order).
      * @param unassociatedTrackGroups Contains {@link TrackGroup}s not associated with any renderer.
      */
-    /* package */ TrackInfo(TrackGroupArray[] trackGroups, TrackSelection[] trackSelections,
-        int[] mixedMimeTypeAdaptiveSupport, int[][][] formatSupport,
-        TrackGroupArray unassociatedTrackGroups) {
+    /* package */ TrackInfo(int[] rendererTrackTypes, TrackGroupArray[] trackGroups,
+        TrackSelection[] trackSelections, int[] mixedMimeTypeAdaptiveSupport,
+        int[][][] formatSupport, TrackGroupArray unassociatedTrackGroups) {
+      this.rendererTrackTypes = rendererTrackTypes;
       this.trackGroups = trackGroups;
       this.trackSelections = trackSelections;
       this.formatSupport = formatSupport;
@@ -483,7 +456,7 @@ public abstract class MappingTrackSelector extends TrackSelector {
     }
 
     /**
-     * Gets the array of {@link TrackGroup}s associated to the renderer at a specified index.
+     * Returns the array of {@link TrackGroup}s associated to the renderer at a specified index.
      *
      * @param rendererIndex The renderer index.
      * @return The corresponding {@link TrackGroup}s.
@@ -493,7 +466,7 @@ public abstract class MappingTrackSelector extends TrackSelector {
     }
 
     /**
-     * Gets the current {@link TrackSelection} for the renderer at a specified index.
+     * Returns the current {@link TrackSelection} for the renderer at a specified index.
      *
      * @param rendererIndex The renderer index.
      * @return The corresponding {@link TrackSelection}, or null if the renderer is disabled.
@@ -503,7 +476,7 @@ public abstract class MappingTrackSelector extends TrackSelector {
     }
 
     /**
-     * Gets the extent to which a renderer can support playback of the tracks associated to it.
+     * Returns the extent to which a renderer can support playback of the tracks associated to it.
      *
      * @param rendererIndex The renderer index.
      * @return One of {@link #RENDERER_SUPPORT_PLAYABLE_TRACKS},
@@ -525,7 +498,7 @@ public abstract class MappingTrackSelector extends TrackSelector {
     }
 
     /**
-     * Gets the extent to which the format of an individual track is supported by the renderer.
+     * Returns the extent to which the format of an individual track is supported by the renderer.
      *
      * @param rendererIndex The renderer index.
      * @param groupIndex The index of the group to which the track belongs.
@@ -541,7 +514,7 @@ public abstract class MappingTrackSelector extends TrackSelector {
     }
 
     /**
-     * Gets the extent to which the renderer supports adaptation between supported tracks in a
+     * Returns the extent to which the renderer supports adaptation between supported tracks in a
      * specified {@link TrackGroup}.
      * <p>
      * Tracks for which {@link #getTrackFormatSupport(int, int, int)} returns
@@ -580,8 +553,8 @@ public abstract class MappingTrackSelector extends TrackSelector {
     }
 
     /**
-     * Gets the extent to which the renderer supports adaptation between specified tracks within a
-     * {@link TrackGroup}.
+     * Returns the extent to which the renderer supports adaptation between specified tracks within
+     * a {@link TrackGroup}.
      *
      * @param rendererIndex The renderer index.
      * @param groupIndex The index of the group.
@@ -590,10 +563,6 @@ public abstract class MappingTrackSelector extends TrackSelector {
      *     {@link RendererCapabilities#ADAPTIVE_NOT_SUPPORTED}.
      */
     public int getAdaptiveSupport(int rendererIndex, int groupIndex, int[] trackIndices) {
-      TrackGroup trackGroup = trackGroups[rendererIndex].get(groupIndex);
-      if (!trackGroup.adaptive) {
-        return RendererCapabilities.ADAPTIVE_NOT_SUPPORTED;
-      }
       int handledTrackCount = 0;
       int adaptiveSupport = RendererCapabilities.ADAPTIVE_SEAMLESS;
       boolean multipleMimeTypes = false;
@@ -616,12 +585,29 @@ public abstract class MappingTrackSelector extends TrackSelector {
     }
 
     /**
-     * Gets the {@link TrackGroup}s not associated with any renderer.
-     *
-     * @return The {@link TrackGroup}s not associated with any renderer.
+     * Returns the {@link TrackGroup}s not associated with any renderer.
      */
     public TrackGroupArray getUnassociatedTrackGroups() {
       return unassociatedTrackGroups;
+    }
+
+    /**
+     * Returns true if tracks of the specified type exist and have been associated with renderers,
+     * but are all unplayable. Returns false in all other cases.
+     *
+     * @param trackType The track type.
+     * @return True if tracks of the specified type exist, if at least one renderer exists that
+     *     handles tracks of the specified type, and if all of the tracks if the specified type are
+     *     unplayable. False in all other cases.
+     */
+    public boolean hasOnlyUnplayableTracks(int trackType) {
+      int rendererSupport = TrackInfo.RENDERER_SUPPORT_NO_TRACKS;
+      for (int i = 0; i < rendererCount; i++) {
+        if (rendererTrackTypes[i] == trackType) {
+          rendererSupport = Math.max(rendererSupport, getRendererSupport(i));
+        }
+      }
+      return rendererSupport == RENDERER_SUPPORT_UNPLAYABLE_TRACKS;
     }
 
   }

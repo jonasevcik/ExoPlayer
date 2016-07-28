@@ -55,7 +55,7 @@ import java.util.List;
   public interface Callback extends SequenceableLoader.Callback<HlsSampleStreamWrapper> {
 
     /**
-     * Invoked when the wrapper has been prepared.
+     * Called when the wrapper has been prepared.
      */
     void onPrepared();
 
@@ -83,7 +83,7 @@ import java.util.List;
 
   private boolean prepared;
   private int enabledTrackCount;
-  private Format downstreamFormat;
+  private Format downstreamTrackFormat;
   private int upstreamChunkUid;
 
   // Tracks are complicated in HLS. See documentation of buildTracks for details.
@@ -143,6 +143,10 @@ import java.util.List;
     return chunkSource.getDurationUs();
   }
 
+  public int getEnabledTrackCount() {
+    return enabledTrackCount;
+  }
+
   public boolean isLive() {
     return chunkSource.isLive();
   }
@@ -164,11 +168,10 @@ import java.util.List;
     SampleStream[] newStreams = new SampleStream[newSelections.size()];
     for (int i = 0; i < newStreams.length; i++) {
       TrackSelection selection = newSelections.get(i);
-      int group = selection.group;
-      int[] tracks = selection.getTracks();
+      int group = trackGroups.indexOf(selection.getTrackGroup());
       setTrackGroupEnabledState(group, true);
       if (group == primaryTrackGroupIndex) {
-        chunkSource.selectTracks(tracks);
+        chunkSource.selectTracks(selection);
       }
       newStreams[i] = new SampleStreamImpl(group);
     }
@@ -185,7 +188,7 @@ import java.util.List;
     // Cancel requests if necessary.
     if (enabledTrackCount == 0) {
       chunkSource.reset();
-      downstreamFormat = null;
+      downstreamTrackFormat = null;
       mediaChunks.clear();
       if (loader.isLoading()) {
         loader.cancelLoading();
@@ -239,6 +242,15 @@ import java.util.List;
     loader.release();
   }
 
+  public long getLargestQueuedTimestampUs() {
+    long largestQueuedTimestampUs = Long.MIN_VALUE;
+    for (int i = 0; i < sampleQueues.size(); i++) {
+      largestQueuedTimestampUs = Math.max(largestQueuedTimestampUs,
+          sampleQueues.valueAt(i).getLargestQueuedTimestampUs());
+    }
+    return largestQueuedTimestampUs;
+  }
+
   // SampleStream implementation.
 
   /* package */ boolean isReady(int group) {
@@ -259,13 +271,13 @@ import java.util.List;
       mediaChunks.removeFirst();
     }
     HlsMediaChunk currentChunk = mediaChunks.getFirst();
-    Format format = currentChunk.format;
-    if (!format.equals(downstreamFormat)) {
-      eventDispatcher.downstreamFormatChanged(trackType, format,
-          currentChunk.formatEvaluatorTrigger, currentChunk.formatEvaluatorData,
+    Format trackFormat = currentChunk.trackFormat;
+    if (!trackFormat.equals(downstreamTrackFormat)) {
+      eventDispatcher.downstreamFormatChanged(trackType, trackFormat,
+          currentChunk.trackSelectionReason, currentChunk.trackSelectionData,
           currentChunk.startTimeUs);
     }
-    downstreamFormat = format;
+    downstreamTrackFormat = trackFormat;
 
     return sampleQueues.valueAt(group).readData(formatHolder, buffer, loadingFinished,
         lastSeekPositionUs);
@@ -312,8 +324,8 @@ import java.util.List;
       mediaChunks.add(mediaChunk);
     }
     long elapsedRealtimeMs = loader.startLoading(loadable, this, minLoadableRetryCount);
-    eventDispatcher.loadStarted(loadable.dataSpec, loadable.type, trackType, loadable.format,
-        loadable.formatEvaluatorTrigger, loadable.formatEvaluatorData, loadable.startTimeUs,
+    eventDispatcher.loadStarted(loadable.dataSpec, loadable.type, trackType, loadable.trackFormat,
+        loadable.trackSelectionReason, loadable.trackSelectionData, loadable.startTimeUs,
         loadable.endTimeUs, elapsedRealtimeMs);
     return true;
   }
@@ -332,8 +344,8 @@ import java.util.List;
   @Override
   public void onLoadCompleted(Chunk loadable, long elapsedRealtimeMs, long loadDurationMs) {
     chunkSource.onChunkLoadCompleted(loadable);
-    eventDispatcher.loadCompleted(loadable.dataSpec, loadable.type, trackType, loadable.format,
-        loadable.formatEvaluatorTrigger, loadable.formatEvaluatorData, loadable.startTimeUs,
+    eventDispatcher.loadCompleted(loadable.dataSpec, loadable.type, trackType, loadable.trackFormat,
+        loadable.trackSelectionReason, loadable.trackSelectionData, loadable.startTimeUs,
         loadable.endTimeUs, elapsedRealtimeMs, loadDurationMs, loadable.bytesLoaded());
     if (!prepared) {
       continueLoading(lastSeekPositionUs);
@@ -345,8 +357,8 @@ import java.util.List;
   @Override
   public void onLoadCanceled(Chunk loadable, long elapsedRealtimeMs, long loadDurationMs,
       boolean released) {
-    eventDispatcher.loadCanceled(loadable.dataSpec, loadable.type, trackType, loadable.format,
-        loadable.formatEvaluatorTrigger, loadable.formatEvaluatorData, loadable.startTimeUs,
+    eventDispatcher.loadCanceled(loadable.dataSpec, loadable.type, trackType, loadable.trackFormat,
+        loadable.trackSelectionReason, loadable.trackSelectionData, loadable.startTimeUs,
         loadable.endTimeUs, elapsedRealtimeMs, loadDurationMs, loadable.bytesLoaded());
     if (!released) {
       int sampleQueueCount = sampleQueues.size();
@@ -374,8 +386,8 @@ import java.util.List;
       }
       canceled = true;
     }
-    eventDispatcher.loadError(loadable.dataSpec, loadable.type, trackType, loadable.format,
-        loadable.formatEvaluatorTrigger, loadable.formatEvaluatorData, loadable.startTimeUs,
+    eventDispatcher.loadError(loadable.dataSpec, loadable.type, trackType, loadable.trackFormat,
+        loadable.trackSelectionReason, loadable.trackSelectionData, loadable.startTimeUs,
         loadable.endTimeUs, elapsedRealtimeMs, loadDurationMs, loadable.bytesLoaded(), error,
         canceled);
     if (canceled) {
@@ -517,8 +529,8 @@ import java.util.List;
       }
     }
 
-    // Calculate the number of tracks that will be exposed.
-    int chunkSourceTrackCount = chunkSource.getTrackCount();
+    TrackGroup chunkSourceTrackGroup = chunkSource.getTrackGroup();
+    int chunkSourceTrackCount = chunkSourceTrackGroup.length;
 
     // Instantiate the necessary internal data-structures.
     primaryTrackGroupIndex = -1;
@@ -531,9 +543,9 @@ import java.util.List;
       if (i == primaryExtractorTrackIndex) {
         Format[] formats = new Format[chunkSourceTrackCount];
         for (int j = 0; j < chunkSourceTrackCount; j++) {
-          formats[j] = getSampleFormat(chunkSource.getTrackFormat(j), sampleFormat);
+          formats[j] = getSampleFormat(chunkSourceTrackGroup.getFormat(j), sampleFormat);
         }
-        trackGroups[i] = new TrackGroup(chunkSource.isAdaptive(), formats);
+        trackGroups[i] = new TrackGroup(formats);
         primaryTrackGroupIndex = i;
       } else {
         Format trackFormat = null;
@@ -608,6 +620,11 @@ import java.util.List;
     @Override
     public int readData(FormatHolder formatHolder, DecoderInputBuffer buffer) {
       return HlsSampleStreamWrapper.this.readData(group, formatHolder, buffer);
+    }
+
+    @Override
+    public void skipToKeyframeBefore(long timeUs) {
+      sampleQueues.valueAt(group).skipToKeyframeBefore(timeUs);
     }
 
   }

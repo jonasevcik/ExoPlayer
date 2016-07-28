@@ -85,6 +85,7 @@ public abstract class SimpleDecoderAudioRenderer extends BaseRenderer implements
   public SimpleDecoderAudioRenderer(Handler eventHandler,
       AudioRendererEventListener eventListener, AudioCapabilities audioCapabilities,
       int streamType) {
+    super(C.TRACK_TYPE_AUDIO);
     eventDispatcher = new EventDispatcher(eventHandler, eventListener);
     audioSessionId = AudioTrack.SESSION_ID_NOT_SET;
     audioTrack = new AudioTrack(audioCapabilities, streamType);
@@ -118,7 +119,7 @@ public abstract class SimpleDecoderAudioRenderer extends BaseRenderer implements
         long codecInitializedTimestamp = SystemClock.elapsedRealtime();
         eventDispatcher.decoderInitialized(decoder.getName(), codecInitializedTimestamp,
             codecInitializedTimestamp - codecInitializingTimestamp);
-        decoderCounters.codecInitCount++;
+        decoderCounters.decoderInitCount++;
       } catch (AudioDecoderException e) {
         throw ExoPlaybackException.createForRenderer(e, getIndex());
       }
@@ -137,11 +138,13 @@ public abstract class SimpleDecoderAudioRenderer extends BaseRenderer implements
     decoderCounters.ensureUpdated();
   }
 
-  @Override
-  public int getTrackType() {
-    return C.TRACK_TYPE_AUDIO;
-  }
-
+  /**
+   * Creates a decoder for the given format.
+   *
+   * @param format The format for which a decoder is required.
+   * @return The decoder.
+   * @throws AudioDecoderException If an error occurred creating a suitable decoder.
+   */
   protected abstract SimpleDecoder<DecoderInputBuffer, ? extends SimpleOutputBuffer,
       ? extends AudioDecoderException> createDecoder(Format format) throws AudioDecoderException;
 
@@ -183,13 +186,13 @@ public abstract class SimpleDecoderAudioRenderer extends BaseRenderer implements
     if (!audioTrack.isInitialized()) {
       Format outputFormat = getOutputFormat();
       audioTrack.configure(outputFormat.sampleMimeType, outputFormat.channelCount,
-          outputFormat.sampleRate, outputFormat.pcmEncoding);
-      if (audioSessionId != AudioTrack.SESSION_ID_NOT_SET) {
-        audioTrack.initialize(audioSessionId);
-      } else {
-        audioSessionId = audioTrack.initialize();
+          outputFormat.sampleRate, outputFormat.pcmEncoding, 0);
+      if (audioSessionId == AudioTrack.SESSION_ID_NOT_SET) {
+        audioSessionId = audioTrack.initialize(AudioTrack.SESSION_ID_NOT_SET);
         eventDispatcher.audioSessionId(audioSessionId);
         onAudioSessionId(audioSessionId);
+      } else {
+        audioTrack.initialize(audioSessionId);
       }
       audioTrackHasData = false;
       if (getState() == STATE_STARTED) {
@@ -208,7 +211,7 @@ public abstract class SimpleDecoderAudioRenderer extends BaseRenderer implements
       }
     }
 
-    int handleBufferResult = audioTrack.handleBuffer(outputBuffer.data, outputBuffer.timestampUs);
+    int handleBufferResult = audioTrack.handleBuffer(outputBuffer.data, outputBuffer.timeUs);
     lastFeedElapsedRealtimeMs = SystemClock.elapsedRealtime();
 
     // If we are out of sync, allow currentPositionUs to jump backwards.
@@ -292,8 +295,8 @@ public abstract class SimpleDecoderAudioRenderer extends BaseRenderer implements
   }
 
   /**
-   * Invoked when the audio session id becomes known. Once the id is known it will not change
-   * (and hence this method will not be invoked again) unless the renderer is disabled and then
+   * Called when the audio session id becomes known. Once the id is known it will not change (and
+   * hence this method will not be called again) unless the renderer is disabled and then
    * subsequently re-enabled.
    * <p>
    * The default implementation is a no-op.
@@ -311,7 +314,7 @@ public abstract class SimpleDecoderAudioRenderer extends BaseRenderer implements
   }
 
   @Override
-  protected void onReset(long positionUs, boolean joining) {
+  protected void onPositionReset(long positionUs, boolean joining) {
     audioTrack.reset();
     currentPositionUs = positionUs;
     allowPositionDiscontinuity = true;
@@ -342,7 +345,7 @@ public abstract class SimpleDecoderAudioRenderer extends BaseRenderer implements
       if (decoder != null) {
         decoder.release();
         decoder = null;
-        decoderCounters.codecReleaseCount++;
+        decoderCounters.decoderReleaseCount++;
       }
       audioTrack.release();
     } finally {

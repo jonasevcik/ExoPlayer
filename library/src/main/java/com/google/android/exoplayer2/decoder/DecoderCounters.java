@@ -16,22 +16,22 @@
 package com.google.android.exoplayer2.decoder;
 
 /**
- * Maintains codec event counts, for debugging purposes only.
+ * Maintains decoder event counts, for debugging purposes only.
  * <p>
  * Counters should be written from the playback thread only. Counters may be read from any thread.
- * To ensure that the counter values are correctly reflected between threads, users of this class
- * should invoke {@link #ensureUpdated()} prior to reading and after writing.
+ * To ensure that the counter values are made visible across threads, users of this class should
+ * invoke {@link #ensureUpdated()} prior to reading and after writing.
  */
 public final class DecoderCounters {
 
   /**
-   * The number of times the codec has been initialized.
+   * The number of times a decoder has been initialized.
    */
-  public int codecInitCount;
+  public int decoderInitCount;
   /**
-   * The number of times the codec has been released.
+   * The number of times a decoder has been released.
    */
-  public int codecReleaseCount;
+  public int decoderReleaseCount;
   /**
    * The number of queued input buffers.
    */
@@ -61,9 +61,9 @@ public final class DecoderCounters {
   public int maxConsecutiveDroppedOutputBufferCount;
 
   /**
-   * Should be invoked from the playback thread after the counters have been updated. Should also
-   * be invoked from any other thread that wishes to read the counters, before reading. These calls
-   * ensure that counter updates are made visible to the reading threads.
+   * Should be called to ensure counter values are made visible across threads. The playback thread
+   * should call this method after updating the counter values. Any other thread should call this
+   * method before reading the counters.
    */
   public synchronized void ensureUpdated() {
     // Do nothing. The use of synchronized ensures a memory barrier should another thread also
@@ -76,8 +76,8 @@ public final class DecoderCounters {
    * @param other The {@link DecoderCounters} to merge into this instance.
    */
   public void merge(DecoderCounters other) {
-    codecInitCount += other.codecInitCount;
-    codecReleaseCount += other.codecReleaseCount;
+    decoderInitCount += other.decoderInitCount;
+    decoderReleaseCount += other.decoderReleaseCount;
     inputBufferCount += other.inputBufferCount;
     renderedOutputBufferCount += other.renderedOutputBufferCount;
     skippedOutputBufferCount += other.skippedOutputBufferCount;

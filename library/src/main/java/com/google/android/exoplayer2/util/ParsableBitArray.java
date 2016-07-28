@@ -28,7 +28,9 @@ public final class ParsableBitArray {
   private int bitOffset;
   private int byteLimit;
 
-  /** Creates a new instance that initially has no backing data. */
+  /**
+   * Creates a new instance that initially has no backing data.
+   */
   public ParsableBitArray() {}
 
   /**
@@ -81,9 +83,7 @@ public final class ParsableBitArray {
   }
 
   /**
-   * Gets the current bit offset.
-   *
-   * @return The current bit offset.
+   * Returns the current bit offset.
    */
   public int getPosition() {
     return byteOffset * 8 + bitOffset;
@@ -118,7 +118,7 @@ public final class ParsableBitArray {
   /**
    * Reads a single bit.
    *
-   * @return True if the bit is set. False otherwise.
+   * @return Whether the bit is set.
    */
   public boolean readBit() {
     return readBits(1) == 1;

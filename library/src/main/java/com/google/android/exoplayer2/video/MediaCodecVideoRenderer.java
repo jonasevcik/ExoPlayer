@@ -18,6 +18,7 @@ package com.google.android.exoplayer2.video;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ExoPlaybackException;
 import com.google.android.exoplayer2.Format;
+import com.google.android.exoplayer2.drm.DrmInitData;
 import com.google.android.exoplayer2.drm.DrmSessionManager;
 import com.google.android.exoplayer2.mediacodec.MediaCodecInfo;
 import com.google.android.exoplayer2.mediacodec.MediaCodecRenderer;
@@ -58,7 +59,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   private final EventDispatcher eventDispatcher;
   private final long allowedJoiningTimeMs;
   private final int videoScalingMode;
-  private final int maxDroppedFrameCountToNotify;
+  private final int maxDroppedFramesToNotify;
   private final boolean deviceNeedsAutoFrcWorkaround;
 
   private int adaptiveMaxWidth;
@@ -69,7 +70,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   private boolean renderedFirstFrame;
   private long joiningDeadlineMs;
   private long droppedFrameAccumulationStartTimeMs;
-  private int droppedFrameCount;
+  private int droppedFrames;
   private int consecutiveDroppedFrameCount;
 
   private int pendingRotationDegrees;
@@ -144,17 +145,17 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
    * @param eventHandler A handler to use when delivering events to {@code eventListener}. May be
    *     null if delivery of events is not required.
    * @param eventListener A listener of events. May be null if delivery of events is not required.
-   * @param maxDroppedFrameCountToNotify The maximum number of frames that can be dropped between
+   * @param maxDroppedFramesToNotify The maximum number of frames that can be dropped between
    *     invocations of {@link VideoRendererEventListener#onDroppedFrames(int, long)}.
    */
   public MediaCodecVideoRenderer(Context context, MediaCodecSelector mediaCodecSelector,
       int videoScalingMode, long allowedJoiningTimeMs, DrmSessionManager drmSessionManager,
       boolean playClearSamplesWithoutKeys, Handler eventHandler,
-      VideoRendererEventListener eventListener, int maxDroppedFrameCountToNotify) {
-    super(mediaCodecSelector, drmSessionManager, playClearSamplesWithoutKeys);
+      VideoRendererEventListener eventListener, int maxDroppedFramesToNotify) {
+    super(C.TRACK_TYPE_VIDEO, mediaCodecSelector, drmSessionManager, playClearSamplesWithoutKeys);
     this.videoScalingMode = videoScalingMode;
     this.allowedJoiningTimeMs = allowedJoiningTimeMs;
-    this.maxDroppedFrameCountToNotify = maxDroppedFrameCountToNotify;
+    this.maxDroppedFramesToNotify = maxDroppedFramesToNotify;
     frameReleaseTimeHelper = new VideoFrameReleaseTimeHelper(context);
     eventDispatcher = new EventDispatcher(eventHandler, eventListener);
     deviceNeedsAutoFrcWorkaround = deviceNeedsAutoFrcWorkaround();
@@ -169,19 +170,21 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   }
 
   @Override
-  public int getTrackType() {
-    return C.TRACK_TYPE_VIDEO;
-  }
-
-  @Override
   protected int supportsFormat(MediaCodecSelector mediaCodecSelector, Format format)
       throws DecoderQueryException {
     String mimeType = format.sampleMimeType;
     if (!MimeTypes.isVideo(mimeType)) {
       return FORMAT_UNSUPPORTED_TYPE;
     }
+    boolean requiresSecureDecryption = false;
+    DrmInitData drmInitData = format.drmInitData;
+    if (drmInitData != null) {
+      for (int i = 0; i < drmInitData.schemeDataCount; i++) {
+        requiresSecureDecryption |= drmInitData.get(i).requiresSecureDecryption;
+      }
+    }
     MediaCodecInfo decoderInfo = mediaCodecSelector.getDecoderInfo(mimeType,
-        format.requiresSecureDecryption);
+        requiresSecureDecryption);
     if (decoderInfo == null) {
       return FORMAT_UNSUPPORTED_SUBTYPE;
     }
@@ -235,8 +238,8 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   }
 
   @Override
-  protected void onReset(long positionUs, boolean joining) throws ExoPlaybackException {
-    super.onReset(positionUs, joining);
+  protected void onPositionReset(long positionUs, boolean joining) throws ExoPlaybackException {
+    super.onPositionReset(positionUs, joining);
     renderedFirstFrame = false;
     consecutiveDroppedFrameCount = 0;
     joiningDeadlineMs = joining && allowedJoiningTimeMs > 0
@@ -245,7 +248,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
 
   @Override
   public boolean isReady() {
-    if (renderedFirstFrame && super.isReady()) {
+    if ((renderedFirstFrame || super.shouldInitCodec()) && super.isReady()) {
       // Ready. If we were joining then we've now joined, so clear the joining deadline.
       joiningDeadlineMs = -1;
       return true;
@@ -265,14 +268,14 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   @Override
   protected void onStarted() {
     super.onStarted();
-    droppedFrameCount = 0;
+    droppedFrames = 0;
     droppedFrameAccumulationStartTimeMs = SystemClock.elapsedRealtime();
   }
 
   @Override
   protected void onStopped() {
     joiningDeadlineMs = -1;
-    maybeNotifyDroppedFrameCount();
+    maybeNotifyDroppedFrames();
     super.onStopped();
   }
 
@@ -303,10 +306,6 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     }
   }
 
-  /**
-   * @param surface The surface to set.
-   * @throws ExoPlaybackException
-   */
   private void setSurface(Surface surface) throws ExoPlaybackException {
     if (this.surface == surface) {
       return;
@@ -345,13 +344,6 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         : newFormat.pixelWidthHeightRatio;
     pendingRotationDegrees = newFormat.rotationDegrees == Format.NO_VALUE ? 0
         : newFormat.rotationDegrees;
-  }
-
-  /**
-   * @return True if the first frame has been rendered (playback has not necessarily begun).
-   */
-  protected final boolean haveRenderedFirstFrame() {
-    return renderedFirstFrame;
   }
 
   @Override
@@ -461,28 +453,28 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     return false;
   }
 
-  protected void skipOutputBuffer(MediaCodec codec, int bufferIndex) {
+  private void skipOutputBuffer(MediaCodec codec, int bufferIndex) {
     TraceUtil.beginSection("skipVideoBuffer");
     codec.releaseOutputBuffer(bufferIndex, false);
     TraceUtil.endSection();
     decoderCounters.skippedOutputBufferCount++;
   }
 
-  protected void dropOutputBuffer(MediaCodec codec, int bufferIndex) {
+  private void dropOutputBuffer(MediaCodec codec, int bufferIndex) {
     TraceUtil.beginSection("dropVideoBuffer");
     codec.releaseOutputBuffer(bufferIndex, false);
     TraceUtil.endSection();
     decoderCounters.droppedOutputBufferCount++;
-    droppedFrameCount++;
+    droppedFrames++;
     consecutiveDroppedFrameCount++;
     decoderCounters.maxConsecutiveDroppedOutputBufferCount = Math.max(consecutiveDroppedFrameCount,
         decoderCounters.maxConsecutiveDroppedOutputBufferCount);
-    if (droppedFrameCount == maxDroppedFrameCountToNotify) {
-      maybeNotifyDroppedFrameCount();
+    if (droppedFrames == maxDroppedFramesToNotify) {
+      maybeNotifyDroppedFrames();
     }
   }
 
-  protected void renderOutputBuffer(MediaCodec codec, int bufferIndex) {
+  private void renderOutputBuffer(MediaCodec codec, int bufferIndex) {
     maybeNotifyVideoSizeChanged();
     TraceUtil.beginSection("releaseOutputBuffer");
     codec.releaseOutputBuffer(bufferIndex, true);
@@ -494,7 +486,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   }
 
   @TargetApi(21)
-  protected void renderOutputBufferV21(MediaCodec codec, int bufferIndex, long releaseTimeNs) {
+  private void renderOutputBufferV21(MediaCodec codec, int bufferIndex, long releaseTimeNs) {
     maybeNotifyVideoSizeChanged();
     TraceUtil.beginSection("releaseOutputBuffer");
     codec.releaseOutputBuffer(bufferIndex, releaseTimeNs);
@@ -585,12 +577,12 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     }
   }
 
-  private void maybeNotifyDroppedFrameCount() {
-    if (droppedFrameCount > 0) {
+  private void maybeNotifyDroppedFrames() {
+    if (droppedFrames > 0) {
       long now = SystemClock.elapsedRealtime();
       long elapsedMs = now - droppedFrameAccumulationStartTimeMs;
-      eventDispatcher.droppedFrameCount(droppedFrameCount, elapsedMs);
-      droppedFrameCount = 0;
+      eventDispatcher.droppedFrames(droppedFrames, elapsedMs);
+      droppedFrames = 0;
       droppedFrameAccumulationStartTimeMs = now;
     }
   }
