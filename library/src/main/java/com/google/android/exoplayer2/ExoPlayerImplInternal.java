@@ -379,9 +379,7 @@ import java.util.ArrayList;
     }
 
     // Update the duration.
-    if (playbackInfo.durationUs == C.UNSET_TIME_US) {
       playbackInfo.durationUs = mediaPeriod.getDurationUs();
-    }
 
     // Update the playback position.
     long positionUs = mediaPeriod.readDiscontinuity();

@@ -19,7 +19,6 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.Locale;
 
 import android.net.Uri;
@@ -231,13 +230,18 @@ public class HlsChunkSource {
       }
     }
 
+    if (mediaPlaylist.live || mediaPlaylist.liveEvent) {
+      if (shouldRerequestLiveMediaPlaylist(newVariantIndex)) {
+        out.chunk = newMediaPlaylistChunk(newVariantIndex,
+            trackSelection.getSelectionReason(), trackSelection.getSelectionData());
+        return;
+      }
+    }
+
     int chunkIndex = chunkMediaSequence - mediaPlaylist.mediaSequence;
     if (chunkIndex >= mediaPlaylist.segments.size()) {
       if (!mediaPlaylist.live && !mediaPlaylist.liveEvent) {
         out.endOfStream = true;
-      } else if (shouldRerequestLiveMediaPlaylist(newVariantIndex)) {
-        out.chunk = newMediaPlaylistChunk(newVariantIndex,
-            trackSelection.getSelectionReason(), trackSelection.getSelectionData());
       }
       return;
     }

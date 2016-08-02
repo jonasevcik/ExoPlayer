@@ -200,6 +200,7 @@ public final class HlsMediaSource implements MediaPeriod, MediaSource,
 
   @Override
   public boolean continueLoading(long positionUs) {
+    durationUs = sampleStreamWrappers[0].getDurationUs();
     return sequenceableLoader.continueLoading(positionUs);
   }
 
