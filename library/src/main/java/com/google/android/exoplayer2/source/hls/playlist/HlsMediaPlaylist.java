@@ -88,4 +88,32 @@ public final class HlsMediaPlaylist extends HlsPlaylist {
     }
   }
 
+  @Override
+  public boolean equals(Object o) {
+    if (this == o) return true;
+    if (o == null || getClass() != o.getClass()) return false;
+
+    HlsMediaPlaylist that = (HlsMediaPlaylist) o;
+
+    if (mediaSequence != that.mediaSequence) return false;
+    if (targetDurationSecs != that.targetDurationSecs) return false;
+    if (version != that.version) return false;
+    if (live != that.live) return false;
+    if (liveEvent != that.liveEvent) return false;
+    if (durationUs != that.durationUs) return false;
+    return segments.equals(that.segments);
+
+  }
+
+  @Override
+  public int hashCode() {
+    int result = mediaSequence;
+    result = 31 * result + targetDurationSecs;
+    result = 31 * result + version;
+    result = 31 * result + segments.hashCode();
+    result = 31 * result + (live ? 1 : 0);
+    result = 31 * result + (liveEvent ? 1 : 0);
+    result = 31 * result + (int) (durationUs ^ (durationUs >>> 32));
+    return result;
+  }
 }

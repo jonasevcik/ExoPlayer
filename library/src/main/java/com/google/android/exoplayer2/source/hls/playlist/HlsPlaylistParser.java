@@ -296,7 +296,7 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
         segmentByterangeLength = C.LENGTH_UNBOUNDED;
       } else if(line.startsWith(TAG_PLAYLIST_TYPE)) {
         String playlistType = parseStringAttr(line, REGEX_PLAYLIST_TYPE);
-        liveEvent = playlistType != null && playlistType.toUpperCase().equals("EVENT");
+        liveEvent = playlistType != null && playlistType.equalsIgnoreCase("EVENT");
       } else if (line.equals(TAG_ENDLIST)) {
         live = false;
       }

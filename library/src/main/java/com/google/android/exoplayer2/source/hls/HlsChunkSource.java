@@ -24,7 +24,6 @@ import java.util.Locale;
 import android.net.Uri;
 import android.os.SystemClock;
 import android.text.TextUtils;
-import android.util.Log;
 
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
@@ -78,6 +77,7 @@ public class HlsChunkSource {
   private final HlsMediaPlaylist[] variantPlaylists;
   private final TrackGroup trackGroup;
   private final long[] variantLastPlaylistLoadTimesMs;
+  private final boolean[] variantPlaylistChanged;
 
   private byte[] scratchSpace;
   private boolean live;
@@ -112,6 +112,7 @@ public class HlsChunkSource {
     playlistParser = new HlsPlaylistParser();
     variantPlaylists = new HlsMediaPlaylist[variants.length];
     variantLastPlaylistLoadTimesMs = new long[variants.length];
+    variantPlaylistChanged = new boolean[variants.length];
 
     Format[] variantFormats = new Format[variants.length];
     int[] initialTrackSelection = new int[variants.length];
@@ -205,8 +206,9 @@ public class HlsChunkSource {
     }
 
     int chunkMediaSequence;
-    if (live) {
-      if (previous == null) {
+    if (live && !liveEvent) {
+      if (previous == null) { //TODO play 3rd chunk from the end
+        // playbackpositionus
         chunkMediaSequence = Util.binarySearchFloor(mediaPlaylist.segments, playbackPositionUs,
             true, true) + mediaPlaylist.mediaSequence;
       } else {
@@ -230,7 +232,7 @@ public class HlsChunkSource {
       }
     }
 
-    if (mediaPlaylist.live || mediaPlaylist.liveEvent) {
+    if (mediaPlaylist.live || mediaPlaylist.liveEvent) { //TODO live events are not refreshing playlist while paused
       if (shouldRerequestLiveMediaPlaylist(newVariantIndex)) {
         out.chunk = newMediaPlaylistChunk(newVariantIndex,
             trackSelection.getSelectionReason(), trackSelection.getSelectionData());
@@ -240,7 +242,7 @@ public class HlsChunkSource {
 
     int chunkIndex = chunkMediaSequence - mediaPlaylist.mediaSequence;
     if (chunkIndex >= mediaPlaylist.segments.size()) {
-      if (!mediaPlaylist.live && !mediaPlaylist.liveEvent) {
+      if (!mediaPlaylist.live) {
         out.endOfStream = true;
       }
       return;
@@ -425,7 +427,8 @@ public class HlsChunkSource {
     long timeSinceLastMediaPlaylistLoadMs =
         SystemClock.elapsedRealtime() - variantLastPlaylistLoadTimesMs[variantIndex];
     // Don't re-request media playlist more often than one-half of the target duration.
-    return timeSinceLastMediaPlaylistLoadMs >= (mediaPlaylist.targetDurationSecs * 1000) / 2;
+    return timeSinceLastMediaPlaylistLoadMs >= (mediaPlaylist.targetDurationSecs * 1000) /
+        (variantPlaylistChanged[variantIndex] ? 1 : 2);
   }
 
   private MediaPlaylistChunk newMediaPlaylistChunk(int variantIndex, int trackSelectionReason,
@@ -474,12 +477,12 @@ public class HlsChunkSource {
 
   private void setMediaPlaylist(int variantIndex, HlsMediaPlaylist mediaPlaylist) {
     variantLastPlaylistLoadTimesMs[variantIndex] = SystemClock.elapsedRealtime();
+    variantPlaylistChanged[variantIndex] = !mediaPlaylist.equals(variantPlaylists[variantIndex]);
     variantPlaylists[variantIndex] = mediaPlaylist;
-    live |= mediaPlaylist.live;
-    liveEvent |= mediaPlaylist.liveEvent;
+    live = mediaPlaylist.live;
+    liveEvent = mediaPlaylist.liveEvent;
 
     durationUs = live && !liveEvent ? C.UNSET_TIME_US : mediaPlaylist.durationUs;
-    Log.d(TAG, "live " + live + " liveEvent " + liveEvent + " durationUs " + durationUs);
   }
 
   // Private classes.
