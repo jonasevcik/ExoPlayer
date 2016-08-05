@@ -15,16 +15,6 @@
  */
 package com.google.android.exoplayer2.source.hls;
 
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.math.BigInteger;
-import java.util.Arrays;
-import java.util.Locale;
-
-import android.net.Uri;
-import android.os.SystemClock;
-import android.text.TextUtils;
-
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.extractor.Extractor;
@@ -48,6 +38,16 @@ import com.google.android.exoplayer2.upstream.DataSpec;
 import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.util.UriUtil;
 import com.google.android.exoplayer2.util.Util;
+
+import android.net.Uri;
+import android.os.SystemClock;
+import android.text.TextUtils;
+
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.math.BigInteger;
+import java.util.Arrays;
+import java.util.Locale;
 
 /**
  * A temporary test source of HLS chunks.

@@ -15,9 +15,9 @@
  */
 package com.google.android.exoplayer2.source.hls.playlist;
 
-import java.util.List;
-
 import com.google.android.exoplayer2.C;
+
+import java.util.List;
 
 /**
  * Represents an HLS media playlist.
