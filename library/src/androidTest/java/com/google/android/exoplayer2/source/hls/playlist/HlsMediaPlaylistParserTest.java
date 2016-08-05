@@ -38,6 +38,7 @@ public class HlsMediaPlaylistParserTest extends TestCase {
     String playlistString = "#EXTM3U\n"
         + "#EXT-X-VERSION:3\n"
         + "#EXT-X-TARGETDURATION:8\n"
+        + "#EXT-X-PLAYLIST-TYPE:VOD\n"
         + "#EXT-X-MEDIA-SEQUENCE:2679\n"
         + "#EXT-X-DISCONTINUITY-SEQUENCE:4\n"
         + "#EXT-X-ALLOW-CACHE:YES\n"
@@ -76,6 +77,7 @@ public class HlsMediaPlaylistParserTest extends TestCase {
 
       assertEquals(2679, mediaPlaylist.mediaSequence);
       assertEquals(8, mediaPlaylist.targetDurationSecs);
+      assertEquals(false, mediaPlaylist.liveEvent);
       assertEquals(3, mediaPlaylist.version);
       assertEquals(false, mediaPlaylist.live);
       List<HlsMediaPlaylist.Segment> segments = mediaPlaylist.segments;
