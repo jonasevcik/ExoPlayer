@@ -15,22 +15,26 @@
  */
 package com.google.android.exoplayer2.source.hls.playlist;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
-import android.net.Uri;
-
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.ParserException;
 import com.google.android.exoplayer2.source.hls.playlist.HlsMediaPlaylist.Segment;
 import com.google.android.exoplayer2.upstream.ParsingLoadable;
 import com.google.android.exoplayer2.util.MimeTypes;
+
+import android.net.Uri;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Queue;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * HLS playlists parsing logic.
