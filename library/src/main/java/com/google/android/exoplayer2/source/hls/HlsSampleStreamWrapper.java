@@ -314,6 +314,8 @@ import java.util.List;
     }
 
     if (loadable == null) {
+      callback.onContinueLoadingRequested(this); //TODO don't use active waiting. This situation happens when we want
+      // to load a new chunk, but its live playlist isn't updated yet
       return false;
     }
 

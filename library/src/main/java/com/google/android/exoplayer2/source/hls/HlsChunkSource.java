@@ -209,8 +209,7 @@ public class HlsChunkSource {
     if (live && !liveEvent) {
       if (previous == null) { //TODO play 3rd chunk from the end
         // playbackpositionus
-        chunkMediaSequence = Util.binarySearchFloor(mediaPlaylist.segments, playbackPositionUs,
-            true, true) + mediaPlaylist.mediaSequence;
+        chunkMediaSequence = getLiveStartChunkMediaSequence(newVariantIndex);
       } else {
         chunkMediaSequence = getLiveNextChunkSequenceNumber(previous.chunkIndex, oldVariantIndex,
             newVariantIndex);
@@ -232,7 +231,7 @@ public class HlsChunkSource {
       }
     }
 
-    if (mediaPlaylist.live || mediaPlaylist.liveEvent) { //TODO live events are not refreshing playlist while paused
+    if (mediaPlaylist.live) { //TODO live events are not refreshing playlist while paused
       if (shouldRerequestLiveMediaPlaylist(newVariantIndex)) {
         out.chunk = newMediaPlaylistChunk(newVariantIndex,
             trackSelection.getSelectionReason(), trackSelection.getSelectionData());
@@ -429,6 +428,13 @@ public class HlsChunkSource {
     // Don't re-request media playlist more often than one-half of the target duration.
     return timeSinceLastMediaPlaylistLoadMs >= (mediaPlaylist.targetDurationSecs * 1000) /
         (variantPlaylistChanged[variantIndex] ? 1 : 2);
+  }
+
+  private int getLiveStartChunkMediaSequence(int variantIndex) {
+    // For live start playback from the third chunk from the end.
+    HlsMediaPlaylist mediaPlaylist = variantPlaylists[variantIndex];
+    int chunkIndex = mediaPlaylist.segments.size() > 3 ? mediaPlaylist.segments.size() - 3 : 0;
+    return chunkIndex + mediaPlaylist.mediaSequence;
   }
 
   private MediaPlaylistChunk newMediaPlaylistChunk(int variantIndex, int trackSelectionReason,
